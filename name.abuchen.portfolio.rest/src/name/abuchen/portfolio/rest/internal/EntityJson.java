@@ -77,6 +77,18 @@ public final class EntityJson
         json.addProperty("uuid", security.getUUID()); //$NON-NLS-1$
         json.addProperty("name", security.getName()); //$NON-NLS-1$
         json.addProperty("currencyCode", security.getCurrencyCode()); //$NON-NLS-1$
+        addSecurityDetails(json, client, security);
+        return json;
+    }
+
+    /**
+     * The identifying and descriptive fields of a security that are not
+     * already implied by its role in the enclosing object: ISIN/WKN/ticker,
+     * note and custom attributes. Shared by the instruments endpoint and by
+     * the holdings endpoint's per-security enrichment.
+     */
+    private static void addSecurityDetails(JsonObject json, Client client, Security security)
+    {
         if (security.getIsin() != null)
             json.addProperty("isin", security.getIsin()); //$NON-NLS-1$
         if (security.getWkn() != null)
@@ -89,8 +101,6 @@ public final class EntityJson
         var attributes = attributesJson(client, security);
         if (attributes.size() > 0)
             json.add("attributes", attributes); //$NON-NLS-1$
-
-        return json;
     }
 
     /**
@@ -158,7 +168,7 @@ public final class EntityJson
      * The statement of assets: every holding - securities and cash accounts
      * uniformly - valued at the snapshot date in the reporting currency.
      */
-    public static JsonObject toJson(ClientSnapshot snapshot, String reportingCurrency)
+    public static JsonObject toJson(Client client, ClientSnapshot snapshot, String reportingCurrency)
     {
         var total = snapshot.getMonetaryAssets();
 
@@ -170,12 +180,12 @@ public final class EntityJson
         var items = new JsonArray();
         snapshot.getAssetPositions() //
                         .sorted(new AssetPosition.ByDescription()) //
-                        .forEach(position -> items.add(toJson(position, total)));
+                        .forEach(position -> items.add(toJson(client, position, total)));
         json.add("items", items); //$NON-NLS-1$
         return json;
     }
 
-    private static JsonObject toJson(AssetPosition position, Money totalAssets)
+    private static JsonObject toJson(Client client, AssetPosition position, Money totalAssets)
     {
         var security = position.getSecurity();
         var vehicle = position.getInvestmentVehicle();
@@ -201,6 +211,8 @@ public final class EntityJson
             if (securityPrice.getDate() != null)
                 price.addProperty("date", securityPrice.getDate().toString()); //$NON-NLS-1$
             json.add("price", price); //$NON-NLS-1$
+
+            addSecurityDetails(json, client, security);
         }
 
         json.add("valuation", toJson(position.getValuation())); //$NON-NLS-1$
