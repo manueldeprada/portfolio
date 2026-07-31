@@ -154,7 +154,7 @@ public final class EntityJson
         return result;
     }
 
-    public static JsonObject toJson(Account account)
+    public static JsonObject toJson(Account account, Money balance)
     {
         var json = new JsonObject();
         json.addProperty("uuid", account.getUUID()); //$NON-NLS-1$
@@ -162,6 +162,7 @@ public final class EntityJson
         json.addProperty("currencyCode", account.getCurrencyCode()); //$NON-NLS-1$
         if (account.getNote() != null)
             json.addProperty("note", account.getNote()); //$NON-NLS-1$
+        json.add("balance", toJson(balance)); //$NON-NLS-1$
         return json;
     }
 
@@ -934,7 +935,7 @@ public final class EntityJson
         return money != null ? toJson(money) : JsonNull.INSTANCE;
     }
 
-    public static JsonObject toJson(Portfolio portfolio)
+    public static JsonObject toJson(Portfolio portfolio, Money value)
     {
         var json = new JsonObject();
         json.addProperty("uuid", portfolio.getUUID()); //$NON-NLS-1$
@@ -943,6 +944,7 @@ public final class EntityJson
             json.addProperty("note", portfolio.getNote()); //$NON-NLS-1$
         if (portfolio.getReferenceAccount() != null)
             json.addProperty("referenceCashAccount", portfolio.getReferenceAccount().getUUID()); //$NON-NLS-1$
+        json.add("value", toJson(value)); //$NON-NLS-1$
         return json;
     }
 

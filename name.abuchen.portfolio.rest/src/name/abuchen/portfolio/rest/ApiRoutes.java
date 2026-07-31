@@ -99,15 +99,24 @@ public final class ApiRoutes
                             return Response.noContent();
                         }));
 
-        router.add("GET", "/v1/files/{file}/cash-accounts", read(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
-                        (client, req) -> Response.json(200, AccountsHandler.list(client))));
-        router.add("GET", "/v1/files/{file}/cash-accounts/{uuid}", read(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
-                        (client, req) -> Response.json(200, AccountsHandler.get(client, req.pathParam("uuid"))))); //$NON-NLS-1$
+        router.add("GET", "/v1/files/{file}/cash-accounts", calc(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
+                        (context, req) -> Response.json(200,
+                                        AccountsHandler.list(context.client(), context.factory(), req.queryParam("date")))), //$NON-NLS-1$
+                        "date"); //$NON-NLS-1$
+        router.add("GET", "/v1/files/{file}/cash-accounts/{uuid}", calc(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
+                        (context, req) -> Response.json(200, AccountsHandler.get(context.client(), context.factory(),
+                                        req.pathParam("uuid"), req.queryParam("date")))), //$NON-NLS-1$ //$NON-NLS-2$
+                        "date"); //$NON-NLS-1$
 
-        router.add("GET", "/v1/files/{file}/investment-accounts", read(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
-                        (client, req) -> Response.json(200, PortfoliosHandler.list(client))));
-        router.add("GET", "/v1/files/{file}/investment-accounts/{uuid}", read(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
-                        (client, req) -> Response.json(200, PortfoliosHandler.get(client, req.pathParam("uuid"))))); //$NON-NLS-1$
+        router.add("GET", "/v1/files/{file}/investment-accounts", calc(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
+                        (context, req) -> Response.json(200, PortfoliosHandler.list(context.client(), context.factory(),
+                                        req.queryParam("date"), req.queryParam("reportingCurrency")))), //$NON-NLS-1$ //$NON-NLS-2$
+                        "date", "reportingCurrency"); //$NON-NLS-1$ //$NON-NLS-2$
+        router.add("GET", "/v1/files/{file}/investment-accounts/{uuid}", calc(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
+                        (context, req) -> Response.json(200, PortfoliosHandler.get(context.client(), context.factory(),
+                                        req.pathParam("uuid"), req.queryParam("date"), //$NON-NLS-1$ //$NON-NLS-2$
+                                        req.queryParam("reportingCurrency")))), //$NON-NLS-1$
+                        "date", "reportingCurrency"); //$NON-NLS-1$ //$NON-NLS-2$
 
         router.add("GET", "/v1/files/{file}/transactions", read(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
                         (client, req) -> Response.json(200, TransactionsHandler.list(client))));
