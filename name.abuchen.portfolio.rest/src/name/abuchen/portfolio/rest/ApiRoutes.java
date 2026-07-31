@@ -114,8 +114,9 @@ public final class ApiRoutes
 
         router.add("GET", "/v1/files/{file}/holdings", calc(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
                         (context, req) -> Response.json(200, HoldingsHandler.list(context.client(), context.factory(),
-                                        req.queryParam("date"), req.queryParam("reportingCurrency")))), //$NON-NLS-1$ //$NON-NLS-2$
-                        "date", "reportingCurrency"); //$NON-NLS-1$ //$NON-NLS-2$
+                                        req.queryParam("date"), req.queryParam("openingDate"), //$NON-NLS-1$ //$NON-NLS-2$
+                                        req.queryParam("reportingCurrency"), req.queryParam("costMethod")))), //$NON-NLS-1$ //$NON-NLS-2$
+                        "date", "openingDate", "reportingCurrency", "costMethod"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
 
         router.add("GET", "/v1/files/{file}/performance", calc(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
                         (context, req) -> Response.json(200, PerformanceHandler.list(context.client(),
