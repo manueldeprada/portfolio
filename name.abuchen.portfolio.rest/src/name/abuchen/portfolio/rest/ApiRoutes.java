@@ -18,6 +18,7 @@ import name.abuchen.portfolio.rest.internal.InstrumentChangeLog;
 import name.abuchen.portfolio.rest.internal.InstrumentPerformanceHandler;
 import name.abuchen.portfolio.rest.internal.OpenApiHandler;
 import name.abuchen.portfolio.rest.internal.PairingHandler;
+import name.abuchen.portfolio.rest.internal.PerformanceCalendarHandler;
 import name.abuchen.portfolio.rest.internal.PerformanceHandler;
 import name.abuchen.portfolio.rest.internal.PortfoliosHandler;
 import name.abuchen.portfolio.rest.internal.Request;
@@ -170,6 +171,13 @@ public final class ApiRoutes
 
         router.add("GET", "/v1/files/{file}/performance/series", calc(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
                         (context, req) -> Response.json(200, PerformanceHandler.series(context.client(),
+                                        context.factory(), req.queryParam("openingDate"), //$NON-NLS-1$
+                                        req.queryParam("closingDate"), //$NON-NLS-1$
+                                        req.queryParam("reportingCurrency")))), //$NON-NLS-1$
+                        "openingDate", "closingDate", "reportingCurrency"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        router.add("GET", "/v1/files/{file}/performance/calendar", calc(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
+                        (context, req) -> Response.json(200, PerformanceCalendarHandler.list(context.client(),
                                         context.factory(), req.queryParam("openingDate"), //$NON-NLS-1$
                                         req.queryParam("closingDate"), //$NON-NLS-1$
                                         req.queryParam("reportingCurrency")))), //$NON-NLS-1$
