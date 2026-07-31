@@ -49,7 +49,8 @@ public class McpToolsDriftTest
                     "GET /v1/openapi.yaml", //
                     "GET /v1/version", //
                     "POST /v1/auth/requests", //
-                    "GET /v1/auth/requests/{id}");
+                    "GET /v1/auth/requests/{id}", //
+                    "GET /v1/files/{file}/transactions");
 
     private static final Pattern TOOL_NAME = Pattern.compile("pp_[a-z0-9_]+");
 

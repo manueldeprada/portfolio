@@ -77,7 +77,9 @@ public class OpenApiSpecDriftTest
                     "PairingRequestStatus.status", "TradesResponse.costMethod", "TradesResponse.taxesAndFees",
                     "TradesResponse.grouping", "TradesResponse.status", "Performance.costMethod",
                     "InstrumentPerformanceContext.costMethod", "InstrumentPerformanceContext.taxesAndFees",
-                    "InstrumentPerformanceContext.metrics");
+                    "InstrumentPerformanceContext.metrics", //
+                    "Transaction.owner", //
+                    "Transaction.type");
 
     private IEclipsePreferences node;
 
