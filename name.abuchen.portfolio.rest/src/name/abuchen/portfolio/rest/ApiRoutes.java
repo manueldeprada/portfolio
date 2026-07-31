@@ -26,6 +26,7 @@ import name.abuchen.portfolio.rest.internal.Response;
 import name.abuchen.portfolio.rest.internal.Router;
 import name.abuchen.portfolio.rest.internal.SecuritiesHandler;
 import name.abuchen.portfolio.rest.internal.SecurityPerformanceHandler;
+import name.abuchen.portfolio.rest.internal.SecurityPricesHandler;
 import name.abuchen.portfolio.rest.internal.TradesHandler;
 import name.abuchen.portfolio.rest.internal.VersionHandler;
 import name.abuchen.portfolio.rest.internal.mcp.McpEndpoint;
@@ -87,6 +88,10 @@ public final class ApiRoutes
                         (client, req) -> Response.json(200, SecuritiesHandler.attributeTypes(client))));
         router.add("GET", "/v1/files/{file}/instruments/{uuid}", read(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
                         (client, req) -> Response.json(200, SecuritiesHandler.get(client, req.pathParam("uuid"))))); //$NON-NLS-1$
+        router.add("GET", "/v1/files/{file}/instruments/{uuid}/prices", read(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
+                        (client, req) -> Response.json(200, SecurityPricesHandler.list(client,
+                                        req.pathParam("uuid"), req.queryParam("from"), req.queryParam("to")))), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                        "from", "to"); //$NON-NLS-1$ //$NON-NLS-2$
         router.add("PATCH", "/v1/files/{file}/instruments/{uuid}", write(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
                         (file, req) -> {
                             var result = SecuritiesHandler.patch(file.getClient(), req.pathParam("uuid"), //$NON-NLS-1$
