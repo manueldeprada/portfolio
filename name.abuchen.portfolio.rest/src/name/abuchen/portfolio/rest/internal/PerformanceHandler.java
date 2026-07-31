@@ -90,6 +90,6 @@ public final class PerformanceHandler
         var interval = Interval.of(openingDate, closingDate);
         var index = PerformanceIndex.forClient(client, converter, interval, new ArrayList<>());
 
-        return EntityJson.performanceSeries(openingDate, closingDate, currency, index);
+        return EntityJson.performanceSeries(client, openingDate, closingDate, currency, index);
     }
 }
