@@ -51,6 +51,7 @@ public class McpToolsDriftTest
                     "POST /v1/auth/requests", //
                     "GET /v1/auth/requests/{id}", //
                     "GET /v1/files/{file}/transactions", //
+                    "GET /v1/files/{file}/performance/securities", //
                     "GET /v1/files/{file}/performance/series");
 
     private static final Pattern TOOL_NAME = Pattern.compile("pp_[a-z0-9_]+");

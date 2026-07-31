@@ -24,6 +24,7 @@ import name.abuchen.portfolio.rest.internal.Request;
 import name.abuchen.portfolio.rest.internal.Response;
 import name.abuchen.portfolio.rest.internal.Router;
 import name.abuchen.portfolio.rest.internal.SecuritiesHandler;
+import name.abuchen.portfolio.rest.internal.SecurityPerformanceHandler;
 import name.abuchen.portfolio.rest.internal.TradesHandler;
 import name.abuchen.portfolio.rest.internal.VersionHandler;
 import name.abuchen.portfolio.rest.internal.mcp.McpEndpoint;
@@ -173,6 +174,13 @@ public final class ApiRoutes
                                         req.queryParam("closingDate"), //$NON-NLS-1$
                                         req.queryParam("reportingCurrency")))), //$NON-NLS-1$
                         "openingDate", "closingDate", "reportingCurrency"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
+        router.add("GET", "/v1/files/{file}/performance/securities", calc(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
+                        (context, req) -> Response.json(200, SecurityPerformanceHandler.list(context.client(),
+                                        context.factory(), req.queryParam("openingDate"), //$NON-NLS-1$
+                                        req.queryParam("closingDate"), req.queryParam("reportingCurrency"), //$NON-NLS-1$ //$NON-NLS-2$
+                                        req.queryParam("costMethod")))), //$NON-NLS-1$
+                        "openingDate", "closingDate", "reportingCurrency", "costMethod"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
 
         return router;
     }
