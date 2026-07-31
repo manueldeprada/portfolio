@@ -81,7 +81,7 @@ public final class PerformanceCalendarHandler
             result.add(new MonthEntry(month, ttwror, entry.getValue()));
         }
 
-        return EntityJson.performanceCalendar(currency, result);
+        return EntityJson.performanceCalendar(openingDate, closingDate, currency, result);
     }
 
     /** the month as the index wants it: start excluded, so the previous month's last day */

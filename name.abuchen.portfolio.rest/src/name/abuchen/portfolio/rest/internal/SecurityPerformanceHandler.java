@@ -44,6 +44,6 @@ public final class SecurityPerformanceHandler
         var interval = Interval.of(openingDate, closingDate);
         var snapshot = LazySecurityPerformanceSnapshot.create(client, converter, interval);
 
-        return EntityJson.securityPerformance(currency, costMethod, snapshot.getRecords());
+        return EntityJson.securityPerformance(openingDate, closingDate, currency, costMethod, snapshot.getRecords());
     }
 }
