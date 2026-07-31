@@ -167,6 +167,13 @@ public final class ApiRoutes
                                         req.queryParam("taxesAndFees"), req.queryParam("reportingCurrency")))), //$NON-NLS-1$ //$NON-NLS-2$
                         TRADE_PARAMS);
 
+        router.add("GET", "/v1/files/{file}/performance/series", calc(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
+                        (context, req) -> Response.json(200, PerformanceHandler.series(context.client(),
+                                        context.factory(), req.queryParam("openingDate"), //$NON-NLS-1$
+                                        req.queryParam("closingDate"), //$NON-NLS-1$
+                                        req.queryParam("reportingCurrency")))), //$NON-NLS-1$
+                        "openingDate", "closingDate", "reportingCurrency"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+
         return router;
     }
 
