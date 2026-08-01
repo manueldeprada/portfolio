@@ -973,29 +973,52 @@ paths:
     post:
       operationId: createTransaction
       tags: [Transactions]
-      summary: Book a cash-account transaction
+      summary: Book a transaction
       description: |
-        Books one transaction into a cash account. The types accepted here are
-        exactly those that live in a single account: `deposit`, `removal`,
-        `interest`, `interest-charge`, `dividends`, `fees`, `fees-refund`,
-        `taxes` and `tax-refund`. Buys, sells, transfers and deliveries span two
-        owners and are not created through this operation.
+        Books one transaction. `type` is the discriminator and decides which
+        other fields apply; a field belonging to another type is rejected
+        `not-applicable` rather than ignored, because a field silently dropped
+        looks like a field that was honored.
+
+        | `type` | shape |
+        | --- | --- |
+        | `deposit` `removal` `interest` `interest-charge` `dividends` `fees` `fees-refund` `taxes` `tax-refund` | one cash account |
+        | `buy` `sell` | an investment account **and** the cash account paying for it |
+        | `delivery-inbound` `delivery-outbound` | an investment account, no cash leg |
+        | `transfer` | between two cash accounts |
+        | `security-transfer` | between two investment accounts |
+
+        The last four create a **cross entry**: one call books both legs, and
+        the response is the leg the read endpoint reports (the investment
+        account's for a trade, the outbound one for a transfer).
 
         `amount` is the **net** cash flow and is unsigned — the direction
         belongs to the type, so a `removal` of `-50` is rejected rather than
-        read as a deposit. The gross value is derived from the amount and the
-        fee and tax units (`gross = amount ± fees ± taxes`, added for a credit,
-        subtracted for a debit); a `grossAmount` sent along is **checked against
-        that derivation**, never trusted in place of it.
+        read as a deposit. The gross value is derived from it and the fee and
+        tax units, and the direction of that derivation is the model's own: a
+        credit had its fees and taxes withheld (`gross = amount + fees + taxes`)
+        while a purchase paid them on top (`gross = amount − fees − taxes`). A
+        `grossAmount` sent along is **checked against that derivation**, never
+        trusted in place of it.
 
-        Every monetary field must be denominated in the account's own currency:
-        a cash-account transaction has no exchange rate of its own, and
-        converting silently would book a figure the caller never sent.
+        Every monetary field must be denominated in the transaction's own
+        currency — the cash account's, or for a delivery the one `amount` names,
+        or for a security transfer the instrument's. Converting silently would
+        book a figure the caller never sent. The one exchange rate recorded
+        anywhere is the optional `exchangeRate`/`forexGrossAmount` pair on a
+        trade in a foreign-currency instrument, which pins the rate the broker
+        actually used; a cross-currency `transfer` derives its rate from the two
+        amounts, since they already imply it.
 
         Validation mirrors the desktop application's transaction dialogs, which
         is the only place these rules exist — the model itself accepts anything.
         All violations are reported at once as `422`, so one round-trip is
         enough to fix a form.
+
+        An optional client-generated `uuid` makes the call **idempotent**: it
+        becomes the transaction's identity, and a replay is answered `409
+        duplicate-uuid` rather than booking a second one. Send one on any retry
+        path — after a `423`, a timeout, or a restart.
 
         The write is applied to the model in memory and marks the file dirty;
         as everywhere else in v1, only the user saves.
@@ -1025,6 +1048,27 @@ paths:
                   amount: { value: 42.5, currency: EUR }
                   taxes: { value: 7.5, currency: EUR }
                   exDate: "2026-07-06"
+              buy:
+                summary: A purchase, with a client-supplied uuid so a retry cannot double-book it
+                value:
+                  uuid: 3f1c9a52-6b47-4d0e-9a71-2c8e5b04d913
+                  type: buy
+                  portfolio: 5f2d8c1a-9b3e-4a7c-8d0f-1e6b4a2c9d75
+                  account: c4b2a1e0-3f6d-4a2e-8b1c-5d7f9a0e2c46
+                  security: 8a1e0c4b-2f5d-4e6a-b1c3-7d9f0a2e4c68
+                  date: "2026-07-20"
+                  shares: 10
+                  amount: { value: 1009.9, currency: EUR }
+                  fees: { value: 9.9, currency: EUR }
+              transfer:
+                summary: A cross-currency transfer between two cash accounts
+                value:
+                  type: transfer
+                  fromAccount: c4b2a1e0-3f6d-4a2e-8b1c-5d7f9a0e2c46
+                  toAccount: 7d3b6e94-1a52-4c8f-b0d3-9e2a5c17f486
+                  date: "2026-07-20"
+                  amount: { value: 1000, currency: EUR }
+                  toAmount: { value: 1082.4, currency: USD }
       responses:
         "201":
           description: The transaction as booked
@@ -1049,6 +1093,41 @@ paths:
           $ref: "#/components/responses/Conflict"
         "422":
           $ref: "#/components/responses/ValidationFailed"
+        "423":
+          $ref: "#/components/responses/Locked"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/files/{file}/transactions/{uuid}:
+    parameters:
+      - $ref: "#/components/parameters/File"
+      - $ref: "#/components/parameters/Uuid"
+    delete:
+      operationId: deleteTransaction
+      tags: [Transactions]
+      summary: Delete a transaction
+      description: |
+        Deletes the transaction and, when it is one leg of a cross entry, **the
+        other leg with it** — a buy without its cash movement, or a transfer with
+        one side left behind, is not a state the model has a name for. Either leg
+        may be named: the uuid the read endpoint reports, or the hidden one.
+
+        There is no undo, and no `If-Match`: this API is designed for a single
+        client (see the ADR), and the only other actor is the desktop user, whose
+        open dialogs are already covered by `423`.
+      responses:
+        "204":
+          description: Deleted.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
         "423":
           $ref: "#/components/responses/Locked"
         "500":
@@ -2714,10 +2793,12 @@ components:
     TransactionCreate:
       type: object
       description: |
-        A cash-account transaction to book. Which optional fields apply depends
-        on the type, and sending one that does not is rejected `not-applicable`
-        rather than ignored — a field that is silently dropped looks like a
-        field that was honored.
+        A transaction to book. `type` decides which other fields apply; one that
+        does not is rejected `not-applicable`.
+
+        **Cash types** (`deposit`, `removal`, `interest`, `interest-charge`,
+        `dividends`, `fees`, `fees-refund`, `taxes`, `tax-refund`) need
+        `account`, and:
 
         - `security` is **required** for `dividends`, optional for `fees`,
           `fees-refund`, `taxes` and `tax-refund`, and rejected otherwise.
@@ -2726,9 +2807,30 @@ components:
           `interest`. These are the dialogs' rules, not the model's — the model
           would accept a unit on anything.
         - `exDate` requires an instrument and must not be after `date`.
+
+        **`buy` / `sell`** need `portfolio`, `account`, `security` and `shares`,
+        and may carry `fees`, `taxes` and the optional
+        `exchangeRate`/`forexGrossAmount` pair. **`delivery-inbound` /
+        `delivery-outbound`** are the same without a cash leg: `portfolio`,
+        `security`, `shares`, and a currency named by `amount`. An outbound
+        delivery is the one type whose amount may be zero — it is what the
+        application offers for a position written off rather than sold.
+
+        **`transfer`** needs `fromAccount` and `toAccount`, plus `toAmount` when
+        the two hold different currencies. **`security-transfer`** needs
+        `fromPortfolio`, `toPortfolio`, `security` and `shares`, with `amount` in
+        the instrument's own currency.
       additionalProperties: false
-      required: [type, account, date, amount]
+      required: [type, date, amount]
       properties:
+        uuid:
+          type: string
+          format: uuid
+          description: |
+            Optional client-generated identity, making the call idempotent: a
+            replay is answered `409 duplicate-uuid` instead of booking a second
+            transaction. Checked against **both** legs of every cross entry, not
+            only the ones the read endpoint reports.
         type:
           type: string
           enum:
@@ -2741,9 +2843,57 @@ components:
             - fees-refund
             - taxes
             - tax-refund
+            - buy
+            - sell
+            - delivery-inbound
+            - delivery-outbound
+            - transfer
+            - security-transfer
         account:
           type: string
-          description: UUID of the cash account the transaction is booked into.
+          description: |
+            UUID of the cash account. For a cash type it is where the
+            transaction is booked; for a `buy` or `sell` it is the account
+            paying or receiving, and the one whose currency the trade is
+            denominated in.
+        portfolio:
+          type: string
+          description: UUID of the investment account holding the position (`buy`, `sell`, deliveries).
+        fromAccount:
+          type: string
+          description: UUID of the cash account money leaves (`transfer`).
+        toAccount:
+          type: string
+          description: UUID of the cash account money arrives in (`transfer`).
+        fromPortfolio:
+          type: string
+          description: UUID of the investment account the position leaves (`security-transfer`).
+        toPortfolio:
+          type: string
+          description: UUID of the investment account the position arrives in (`security-transfer`).
+        toAmount:
+          allOf:
+            - $ref: "#/components/schemas/MonetaryValue"
+          description: |
+            What arrives in the target account of a cross-currency `transfer`, in
+            that account's currency. Required exactly when the two accounts hold
+            different currencies; the exchange rate recorded on the transfer is
+            derived from the two amounts rather than asked for, since they
+            already imply it.
+        exchangeRate:
+          type: number
+          description: |
+            The rate the broker actually used on a trade in a foreign-currency
+            instrument, recorded so the trade reports as executed rather than at
+            a rate looked up later. Sent together with `forexGrossAmount`, and
+            rejected when the instrument is already in the account's currency.
+        forexGrossAmount:
+          allOf:
+            - $ref: "#/components/schemas/MonetaryValue"
+          description: |
+            The gross value in the **instrument's** currency, checked against
+            `exchangeRate` and the derived gross within the model's rounding
+            tolerance.
         security:
           type: string
           description: UUID of the instrument the transaction relates to.
@@ -3836,6 +3986,7 @@ components:
             - invalid-value
             - invalid-range
             - too-long
+            - duplicate
             - unknown-field
             - unknown-parameter
             - duplicate-parameter
@@ -3870,10 +4021,12 @@ components:
             below; note especially that a **404 never distinguishes** an unknown
             file from a file that exists but is not enabled, that
             `no-activity-in-period` is the one 404 that says the addressed entity
-            *does* exist, and that the three
+            *does* exist, and that the four
             **409** kinds each call for a different response:
             `file-not-open` (a human must open the file), `ambiguous-alias` (retry
-            with the `id`), `delete-blocked` (give up — the instrument is referenced).
+            with the `id`), `delete-blocked` (give up — the instrument is
+            referenced), `duplicate-uuid` (stop — the transaction is already
+            booked, which is exactly what a client-supplied uuid is for).
             `method-not-allowed` (405) is returned for any method a path does not
             list; v1 has no create endpoints.
 
@@ -3891,6 +4044,7 @@ components:
             - https://portfolio-performance.info/rest/problems/file-not-open
             - https://portfolio-performance.info/rest/problems/ambiguous-alias
             - https://portfolio-performance.info/rest/problems/delete-blocked
+            - https://portfolio-performance.info/rest/problems/duplicate-uuid
             - https://portfolio-performance.info/rest/problems/validation
             - https://portfolio-performance.info/rest/problems/user-interaction
             - https://portfolio-performance.info/rest/problems/pairing-pending
@@ -3981,9 +4135,10 @@ components:
       description: |
         The addressed file or entity cannot serve the request in its current state:
         `file-not-open` (enabled but not open — a human must open it),
-        `ambiguous-alias` (the alias matches several records — use the `id`), or, on
-        delete, `delete-blocked` (the instrument is referenced by transactions or
-        plans).
+        `ambiguous-alias` (the alias matches several records — use the `id`),
+        `delete-blocked` (on delete: the instrument is referenced by transactions or
+        plans), or `duplicate-uuid` (on create: a transaction with the supplied uuid
+        already exists, so the request was a replay and must not be retried).
       content:
         application/problem+json:
           schema:

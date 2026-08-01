@@ -136,11 +136,18 @@ public final class ApiRoutes
                         (file, req) -> {
                             var result = TransactionsHandler.create(file.getClient(), parseObject(req));
                             TransactionChangeLog.recordCreation(file.getLabel(), result.typeName(),
-                                            result.accountName(), result.entity().getAsJsonObject().get("value") //$NON-NLS-1$
+                                            result.ownerName(), result.entity().getAsJsonObject().get("value") //$NON-NLS-1$
                                                             .toString());
                             return Response.created(
                                             "/v1/files/" + req.pathParam("file") + "/transactions/" + result.uuid(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
                                             result.entity());
+                        }));
+        router.add("DELETE", "/v1/files/{file}/transactions/{uuid}", write(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
+                        (file, req) -> {
+                            var result = TransactionsHandler.delete(file.getClient(), req.pathParam("uuid")); //$NON-NLS-1$
+                            TransactionChangeLog.recordDeletion(file.getLabel(), result.typeName(),
+                                            result.ownerName(), result.uuid());
+                            return Response.noContent();
                         }));
 
         router.add("GET", "/v1/files/{file}/holdings", calc(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$

@@ -1298,7 +1298,7 @@ public final class EntityJson
      * {@code Type#toString()} (locale-dependent, see {@code AttributeCodec}'s
      * class comment for the same concern with attribute types).
      */
-    private static String wireType(Transaction transaction)
+    /* package */ static String wireType(Transaction transaction)
     {
         if (transaction instanceof AccountTransaction t)
         {

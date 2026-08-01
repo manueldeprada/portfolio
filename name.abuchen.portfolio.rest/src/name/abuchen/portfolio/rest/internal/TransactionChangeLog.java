@@ -24,8 +24,22 @@ public final class TransactionChangeLog
         PortfolioLog.info(creationSummary(fileLabel, type, accountName), List.of(amount));
     }
 
+    /**
+     * A deletion takes both legs of a cross entry with it, so the entry names the
+     * type and owner it removed: after the fact there is nothing left to look up.
+     */
+    public static void recordDeletion(String fileLabel, String type, String ownerName, String uuid)
+    {
+        PortfolioLog.info(deletionSummary(fileLabel, type, ownerName), List.of(uuid));
+    }
+
     /* package */ static String creationSummary(String fileLabel, String type, String accountName)
     {
         return MessageFormat.format(Messages.MsgApiTransactionCreated, type, accountName, fileLabel);
+    }
+
+    /* package */ static String deletionSummary(String fileLabel, String type, String ownerName)
+    {
+        return MessageFormat.format(Messages.MsgApiTransactionDeleted, type, ownerName, fileLabel);
     }
 }

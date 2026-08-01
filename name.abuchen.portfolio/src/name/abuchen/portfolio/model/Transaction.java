@@ -296,6 +296,28 @@ public abstract class Transaction implements Annotated, Adaptable
         return uuid;
     }
 
+    /**
+     * Adopts an externally supplied identity instead of the generated one. This
+     * exists so that a caller creating transactions over an API can make the
+     * creation idempotent: it names the uuid, and a retry after a timeout or a
+     * lost response is recognised as the same transaction rather than booking a
+     * second one.
+     * <p>
+     * Only valid on a transaction that has not been added to an owner yet - the
+     * uuid is the identity every reference to a transaction is by, and changing
+     * it afterwards would orphan those references.
+     * <p>
+     * Deliberately not named {@code setUUID}: that pairs with {@link #getUUID()}
+     * into a writable JavaBeans property, and the reflective property sweeps in
+     * {@code InsertActionTest} and {@code DetectDuplicatesActionTest} would then
+     * treat the identity as an attribute to copy and to vary - which makes two
+     * imports of one transaction look distinct.
+     */
+    public void adoptUUID(String uuid)
+    {
+        this.uuid = Objects.requireNonNull(uuid);
+    }
+
     void generateUUID()
     {
         uuid = UUID.randomUUID().toString();

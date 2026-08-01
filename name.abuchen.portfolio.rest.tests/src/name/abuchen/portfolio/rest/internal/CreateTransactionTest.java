@@ -156,10 +156,12 @@ public class CreateTransactionTest
         }
         catch (ApiException e)
         {
-            // no currency error among them: with the account unresolved there is
-            // nothing to check the currency against, and guessing would be noise
+            // The unresolvable account is *not* among them, and neither is the
+            // currency: the type is what decides which fields a request even has,
+            // so an unrecognised type stops there rather than guessing a shape and
+            // reporting errors against it.
             assertThat(e.getStatus(), is(422));
-            assertThat(codesOf(e), containsInAnyOrder("bogus", "type", "account", "date"));
+            assertThat(codesOf(e), containsInAnyOrder("bogus", "type", "date"));
         }
 
         assertThat(client.getAccounts().get(0).getTransactions().isEmpty(), is(true));
@@ -344,13 +346,15 @@ public class CreateTransactionTest
     }
 
     @Test
-    public void testACrossEntryTypeIsNotCreatableHere()
+    public void testATypeThisApiCannotCreateIsRejected()
     {
         var client = clientWithAccount("EUR");
 
         try
         {
-            TransactionsHandler.create(client, json("{\"type\":\"buy\",\"account\":\"" + accountUuid(client)
+            // a leg of a cross entry, never created on its own: a transfer-out
+            // without its transfer-in is not a state the model has a name for
+            TransactionsHandler.create(client, json("{\"type\":\"transfer-out\",\"account\":\"" + accountUuid(client)
                             + "\",\"date\":\"2026-07-20\",\"amount\":{\"value\":10,\"currency\":\"EUR\"}}"));
             Assert.fail("expected a validation error");
         }
