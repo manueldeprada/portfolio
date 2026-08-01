@@ -56,6 +56,24 @@ info:
       exist (`404 not-found`) — the token must not let a client enumerate files the
       user did not share.
 
+    ## Dates and times are local, and carry no offset
+
+    Every date and date-time in this API is **local wall-clock time in the
+    file's own frame**, written without a zone or offset (`2026-07-20`,
+    `2026-07-20T00:00`). That is exactly what the file stores: a transaction
+    booked on July 20 is booked on July 20, not at some instant that a reader
+    elsewhere would call July 19 or July 21.
+
+    A date-time here therefore **must not be interpreted as UTC**, and must not
+    be "repaired" by appending `Z` or a local offset. Doing so shifts
+    transactions across day boundaries and puts them in a different period than
+    the desktop application does. Parse them as a local date/date-time
+    (`LocalDateTime` and equivalents); if a client needs an instant, it has to
+    supply the zone itself, knowing that the file does not state one.
+
+    The same holds in the other direction: date parameters (`date`,
+    `openingDate`, `closingDate`, `from`, `to`) are plain local dates.
+
     ## Methods
 
     A path serves only the methods listed for it in this document; the only
@@ -2100,6 +2118,12 @@ components:
         date:
           type: string
           format: date-time
+          description: |
+            The booking date and time as the file stores it: **local
+            wall-clock time, with no zone or offset** (`2026-07-20T00:00`).
+            Not UTC, and not to be turned into UTC by appending `Z`: that
+            shifts the transaction across day boundaries and out of the period
+            the desktop application counts it in.
         type:
           type: string
           description: |
