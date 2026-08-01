@@ -99,6 +99,20 @@ public class UIThreadMarshallingTest
         assertThat(host.syncExecResults().stream().anyMatch(Response.class::isInstance), is(false));
     }
 
+    /**
+     * The transaction list computes nothing, but serializing every transaction
+     * of a large file takes long enough that doing it inside syncExec is felt
+     * as UI jank.
+     */
+    @Test
+    public void testTransactionListRunsOffTheUIThread() throws Exception
+    {
+        call("GET", "/v1/files/" + fileId + "/transactions", null);
+
+        assertThat(host.hasAccessedOutsideUIThread(), is(false));
+        assertThat(host.syncExecResults().stream().anyMatch(Response.class::isInstance), is(false));
+    }
+
     @Test
     public void testPerformanceCalculationRunsOffTheUIThread() throws Exception
     {
