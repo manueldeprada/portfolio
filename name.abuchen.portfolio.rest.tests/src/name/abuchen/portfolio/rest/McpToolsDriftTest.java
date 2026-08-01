@@ -57,7 +57,10 @@ public class McpToolsDriftTest
                     "GET /v1/files/{file}/instruments/{uuid}/prices", //
                     "GET /v1/files/{file}/taxonomies", //
                     "POST /v1/files/{file}/transactions", //
-                    "DELETE /v1/files/{file}/transactions/{uuid}");
+                    "DELETE /v1/files/{file}/transactions/{uuid}", //
+                    "GET /v1/files/{file}/imports/{id}", //
+                    "POST /v1/files/{file}/imports", //
+                    "POST /v1/files/{file}/imports/{id}");
 
     private static final Pattern TOOL_NAME = Pattern.compile("pp_[a-z0-9_]+");
 

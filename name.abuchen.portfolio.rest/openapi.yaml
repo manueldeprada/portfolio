@@ -1133,6 +1133,167 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /v1/files/{file}/imports:
+    parameters:
+      - $ref: "#/components/parameters/File"
+    post:
+      operationId: createImport
+      tags: [Imports]
+      summary: Extract transactions from a statement, for review
+      description: |
+        Uploads one bank statement and runs the extractor its **filename**
+        selects — the PDF assistant, which auto-detects the issuing bank from
+        the document's own text, or the Interactive Brokers Flex reader for an
+        `.xml` statement. Nothing is written: the result is a **preview** to
+        review, kept as a session.
+
+        The three-step shape (extract, review, apply) is not ceremony. An
+        extracted item holds live references into the model — a security that
+        may not be in the file yet, an account the extractor guessed — so it
+        cannot be handed to a client and given back. The client reviews a
+        rendering of the items and applies them by **index**.
+
+        The body is the file itself, not a multipart form: the API takes one
+        file per import, and the content type is whatever the file is.
+
+        Sessions live in memory for 30 minutes and die with the application. A
+        lost session costs a re-upload, which is why nothing is written until
+        the apply step.
+      parameters:
+        - name: filename
+          in: query
+          required: true
+          description: |
+            The name of the uploaded file. It **selects the extractor** (`.pdf`
+            or `.xml`), so it is required rather than cosmetic.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/pdf:
+            schema:
+              type: string
+              format: binary
+          application/xml:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "201":
+          description: The extraction, to review.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImportPreview"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+        "423":
+          $ref: "#/components/responses/Locked"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/files/{file}/imports/{id}:
+    parameters:
+      - $ref: "#/components/parameters/File"
+      - name: id
+        in: path
+        required: true
+        description: The extraction session's id.
+        schema:
+          type: string
+    get:
+      operationId: getImport
+      tags: [Imports]
+      summary: Read an extraction preview again
+      description: |
+        The same preview the upload returned, with the checks re-run against the
+        file as it is now — a transaction imported in the meantime turns another
+        item into a duplicate, and the review should say so.
+
+        A session belonging to a different file is reported `404`, not `403`:
+        the two are indistinguishable to a caller that should not hold the id,
+        and saying which would confirm the session exists.
+      responses:
+        "200":
+          description: The extraction, to review.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImportPreview"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    post:
+      operationId: applyImport
+      tags: [Imports]
+      summary: Apply selected items of an extraction
+      description: |
+        Books the selected items into the named accounts. The caller names an
+        account **per currency** — an item is booked into an account of its own
+        currency, and the preview lists the currencies its items need under
+        `requiredCurrencies` — plus one investment account for anything holding
+        a position.
+
+        Nothing is applied unless every index is valid and every account needed
+        was named: a half-applied import would leave the file in a state nobody
+        chose. The session is discarded once applied, so a replay is a `404`
+        rather than a second import.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ImportApply"
+      responses:
+        "200":
+          description: What was imported.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [imported, instrumentsCreated]
+                properties:
+                  imported:
+                    type: integer
+                  instrumentsCreated:
+                    type: integer
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+        "423":
+          $ref: "#/components/responses/Locked"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /v1/files/{file}/holdings:
     parameters:
       - $ref: "#/components/parameters/File"
@@ -2789,6 +2950,137 @@ components:
           $ref: "#/components/schemas/MonetaryValue"
         net:
           $ref: "#/components/schemas/MonetaryValue"
+
+    ImportPreview:
+      type: object
+      description: |
+        What an uploaded statement was found to contain, and what each item
+        would run into if imported.
+      required: [id, fileName, items, requiredCurrencies, errors]
+      properties:
+        id:
+          type: string
+          description: The session id, used to read this preview again and to apply it.
+        fileName:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ImportPreviewItem"
+        requiredCurrencies:
+          type: array
+          description: |
+            Every currency the items are denominated in, and therefore every key
+            the `accounts` object must carry when applying.
+          items:
+            type: string
+        errors:
+          type: array
+          description: |
+            Extraction failures for the file as a whole — a page that could not be
+            parsed, an unrecognised issuer. Distinct from an item's own `checks`.
+          items:
+            type: string
+
+    ImportPreviewItem:
+      type: object
+      required: [index, type, status, checks, createsInstrument]
+      properties:
+        index:
+          type: integer
+          description: What the apply call selects by. Stable for the life of the session.
+        type:
+          type: string
+          description: |
+            The extractor's own label for the item, e.g. "Buy" or "Dividend".
+            **Localized** — it is what the desktop wizard shows, in the
+            application's language, so display it and never switch on it. The
+            machine-readable facts are the other fields.
+        status:
+          type: string
+          description: The worst of this item's checks, which is what a review list sorts on.
+          enum: [ok, warning, error, skipped]
+        createsInstrument:
+          type: boolean
+          description: The item *is* a new instrument, which importing would add to the file.
+        date:
+          type: string
+          format: date-time
+        amount:
+          $ref: "#/components/schemas/MonetaryValue"
+        shares:
+          type: number
+        security:
+          type: object
+          properties:
+            name:
+              type: string
+            isin:
+              type: string
+            currency:
+              type: string
+        source:
+          type: string
+          description: Where in the statement the item came from.
+        failure:
+          type: string
+          description: Present when the item could not be extracted at all.
+        checks:
+          type: array
+          description: |
+            One entry per check that had something to say; a check that passed is
+            absent. Reported per check rather than collapsed into one verdict
+            because "this is a duplicate" and "this currency matches no account"
+            call for different decisions from whoever is reviewing.
+          items:
+            type: object
+            required: [code, severity]
+            properties:
+              code:
+                type: string
+                enum:
+                  - transaction-date
+                  - invalid-type
+                  - security-values
+                  - duplicate
+                  - currency-mismatch
+                  - forex-gross-value
+              severity:
+                type: string
+                enum: [warning, error, skipped]
+              message:
+                type: string
+
+    ImportApply:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          minItems: 1
+          description: The indices of the preview items to import.
+          items:
+            type: integer
+        accounts:
+          type: object
+          description: |
+            The cash account to book into, per currency — the keys are the
+            preview's `requiredCurrencies`, and an account whose currency does
+            not match its key is rejected `currency-mismatch`.
+          additionalProperties:
+            type: string
+        portfolio:
+          type: string
+          description: UUID of the investment account for items that hold a position.
+        convertBuySellToDelivery:
+          type: boolean
+          description: |
+            Book purchases and sales as deliveries instead, for a statement whose
+            cash side is already recorded elsewhere.
+        skipDividends:
+          type: boolean
+          description: Leave dividend items out, for a statement whose dividends are recorded elsewhere.
 
     TransactionCreate:
       type: object

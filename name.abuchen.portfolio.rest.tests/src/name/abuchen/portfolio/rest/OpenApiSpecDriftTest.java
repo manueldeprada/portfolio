@@ -80,7 +80,9 @@ public class OpenApiSpecDriftTest
                     "InstrumentPerformanceContext.metrics", //
                     "Transaction.owner", //
                     "Transaction.type", //
-                    "TransactionCreate.type");
+                    "TransactionCreate.type", //
+                    "ImportPreviewItem.checks", //
+                    "ImportPreviewItem.status");
 
     private IEclipsePreferences node;
 

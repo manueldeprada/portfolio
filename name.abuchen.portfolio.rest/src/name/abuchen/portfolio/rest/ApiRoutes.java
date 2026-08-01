@@ -14,6 +14,8 @@ import name.abuchen.portfolio.rest.internal.ApiException;
 import name.abuchen.portfolio.rest.internal.FileResolver;
 import name.abuchen.portfolio.rest.internal.FilesHandler;
 import name.abuchen.portfolio.rest.internal.HoldingsHandler;
+import name.abuchen.portfolio.rest.internal.ImportSessions;
+import name.abuchen.portfolio.rest.internal.ImportsHandler;
 import name.abuchen.portfolio.rest.internal.InstrumentChangeLog;
 import name.abuchen.portfolio.rest.internal.InstrumentPerformanceHandler;
 import name.abuchen.portfolio.rest.internal.OpenApiHandler;
@@ -150,6 +152,27 @@ public final class ApiRoutes
                             return Response.noContent();
                         }));
 
+        // Import runs extract -> review -> apply, because an extracted item holds
+        // live model references and cannot round-trip through JSON. The extraction
+        // is a write in the sense that matters here: it must not run while the user
+        // has a dialog open, and it creates the securities a later apply will add.
+        router.add("POST", "/v1/files/{file}/imports", write(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
+                        (file, req) -> Response.json(201, ImportsHandler.extract(file.getClient(),
+                                        file.getPath(), req.queryParam("filename"), req.body()))), //$NON-NLS-1$
+                        "filename"); //$NON-NLS-1$
+        router.add("GET", "/v1/files/{file}/imports/{id}", onUiThread(host, req -> {
+            var file = resolver.resolve(req.pathParam("file")).file(); //$NON-NLS-1$
+            return Response.json(200, ImportsHandler.preview(file.getClient(), session(file, req)));
+        }));
+        router.add("POST", "/v1/files/{file}/imports/{id}", write(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
+                        (file, req) -> {
+                            var result = ImportsHandler.apply(file.getClient(), session(file, req),
+                                            parseObject(req));
+                            TransactionChangeLog.recordImport(file.getLabel(), result.imported(),
+                                            result.securitiesCreated());
+                            return Response.json(200, result.entity());
+                        }));
+
         router.add("GET", "/v1/files/{file}/holdings", calc(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
                         (context, req) -> Response.json(200, HoldingsHandler.list(context.client(), context.factory(),
                                         req.queryParam("date"), req.queryParam("openingDate"), //$NON-NLS-1$ //$NON-NLS-2$
@@ -276,6 +299,19 @@ public final class ApiRoutes
 
             return body.apply(resolved.file(), request);
         });
+    }
+
+    /**
+     * The extraction session named by the path, or a 404. Scoped to the file it
+     * was extracted against: applying one file's extraction to another would
+     * book transactions against securities that are not in it.
+     */
+    private static ImportSessions.Session session(OpenFile file, Request request)
+    {
+        var session = ImportSessions.get(file.getPath(), request.pathParam("id")); //$NON-NLS-1$
+        if (session == null)
+            throw ApiException.notFound();
+        return session;
     }
 
     private static JsonObject parseObject(Request request)

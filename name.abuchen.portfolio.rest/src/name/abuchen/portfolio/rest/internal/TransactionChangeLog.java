@@ -33,6 +33,17 @@ public final class TransactionChangeLog
         PortfolioLog.info(deletionSummary(fileLabel, type, ownerName), List.of(uuid));
     }
 
+    /**
+     * An import books many transactions at once, so the entry counts them rather
+     * than listing them: the point of the log line is that the API changed the
+     * file, and by how much.
+     */
+    public static void recordImport(String fileLabel, int imported, int instrumentsCreated)
+    {
+        PortfolioLog.info(MessageFormat.format(Messages.MsgApiImportApplied, imported, instrumentsCreated, fileLabel),
+                        List.of());
+    }
+
     /* package */ static String creationSummary(String fileLabel, String type, String accountName)
     {
         return MessageFormat.format(Messages.MsgApiTransactionCreated, type, accountName, fileLabel);
