@@ -12,6 +12,13 @@ public record Response(int status, String contentType, byte[] body, Map<String, 
         return new Response(status, "application/json", element.toString().getBytes(StandardCharsets.UTF_8), Map.of()); //$NON-NLS-1$
     }
 
+    /** A newly created resource, named by its canonical URL in {@code Location}. */
+    public static Response created(String location, JsonElement element)
+    {
+        return new Response(201, "application/json", element.toString().getBytes(StandardCharsets.UTF_8), //$NON-NLS-1$
+                        Map.of("Location", location)); //$NON-NLS-1$
+    }
+
     /** A response with a caller-supplied content type and raw body, e.g. the OpenAPI document. */
     public static Response of(int status, String contentType, byte[] body)
     {

@@ -79,7 +79,8 @@ public class OpenApiSpecDriftTest
                     "InstrumentPerformanceContext.costMethod", "InstrumentPerformanceContext.taxesAndFees",
                     "InstrumentPerformanceContext.metrics", //
                     "Transaction.owner", //
-                    "Transaction.type");
+                    "Transaction.type", //
+                    "TransactionCreate.type");
 
     private IEclipsePreferences node;
 

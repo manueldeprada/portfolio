@@ -31,6 +31,7 @@ import name.abuchen.portfolio.rest.internal.TaxonomiesHandler;
 import name.abuchen.portfolio.rest.internal.TradesHandler;
 import name.abuchen.portfolio.rest.internal.VersionHandler;
 import name.abuchen.portfolio.rest.internal.mcp.McpEndpoint;
+import name.abuchen.portfolio.rest.internal.TransactionChangeLog;
 import name.abuchen.portfolio.rest.internal.TransactionsHandler;
 import name.abuchen.portfolio.rest.spi.HostApplication;
 import name.abuchen.portfolio.rest.spi.OpenFile;
@@ -131,6 +132,16 @@ public final class ApiRoutes
 
         router.add("GET", "/v1/files/{file}/transactions", read(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
                         (client, req) -> Response.json(200, TransactionsHandler.list(client))));
+        router.add("POST", "/v1/files/{file}/transactions", write(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
+                        (file, req) -> {
+                            var result = TransactionsHandler.create(file.getClient(), parseObject(req));
+                            TransactionChangeLog.recordCreation(file.getLabel(), result.typeName(),
+                                            result.accountName(), result.entity().getAsJsonObject().get("value") //$NON-NLS-1$
+                                                            .toString());
+                            return Response.created(
+                                            "/v1/files/" + req.pathParam("file") + "/transactions/" + result.uuid(), //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                                            result.entity());
+                        }));
 
         router.add("GET", "/v1/files/{file}/holdings", calc(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
                         (context, req) -> Response.json(200, HoldingsHandler.list(context.client(), context.factory(),

@@ -970,6 +970,89 @@ paths:
           $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
+    post:
+      operationId: createTransaction
+      tags: [Transactions]
+      summary: Book a cash-account transaction
+      description: |
+        Books one transaction into a cash account. The types accepted here are
+        exactly those that live in a single account: `deposit`, `removal`,
+        `interest`, `interest-charge`, `dividends`, `fees`, `fees-refund`,
+        `taxes` and `tax-refund`. Buys, sells, transfers and deliveries span two
+        owners and are not created through this operation.
+
+        `amount` is the **net** cash flow and is unsigned — the direction
+        belongs to the type, so a `removal` of `-50` is rejected rather than
+        read as a deposit. The gross value is derived from the amount and the
+        fee and tax units (`gross = amount ± fees ± taxes`, added for a credit,
+        subtracted for a debit); a `grossAmount` sent along is **checked against
+        that derivation**, never trusted in place of it.
+
+        Every monetary field must be denominated in the account's own currency:
+        a cash-account transaction has no exchange rate of its own, and
+        converting silently would book a figure the caller never sent.
+
+        Validation mirrors the desktop application's transaction dialogs, which
+        is the only place these rules exist — the model itself accepts anything.
+        All violations are reported at once as `422`, so one round-trip is
+        enough to fix a form.
+
+        The write is applied to the model in memory and marks the file dirty;
+        as everywhere else in v1, only the user saves.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TransactionCreate"
+            examples:
+              deposit:
+                summary: A deposit
+                value:
+                  type: deposit
+                  account: c4b2a1e0-3f6d-4a2e-8b1c-5d7f9a0e2c46
+                  date: "2026-07-20"
+                  amount: { value: 1000, currency: EUR }
+                  note: Salary
+              dividend:
+                summary: A dividend with tax withheld
+                value:
+                  type: dividends
+                  account: c4b2a1e0-3f6d-4a2e-8b1c-5d7f9a0e2c46
+                  security: 8a1e0c4b-2f5d-4e6a-b1c3-7d9f0a2e4c68
+                  date: "2026-07-20"
+                  shares: 10
+                  amount: { value: 42.5, currency: EUR }
+                  taxes: { value: 7.5, currency: EUR }
+                  exDate: "2026-07-06"
+      responses:
+        "201":
+          description: The transaction as booked
+          headers:
+            Location:
+              description: The canonical URL of the new transaction.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Transaction"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+        "423":
+          $ref: "#/components/responses/Locked"
+        "500":
+          $ref: "#/components/responses/InternalError"
 
   /v1/files/{file}/holdings:
     parameters:
@@ -2628,6 +2711,74 @@ components:
         net:
           $ref: "#/components/schemas/MonetaryValue"
 
+    TransactionCreate:
+      type: object
+      description: |
+        A cash-account transaction to book. Which optional fields apply depends
+        on the type, and sending one that does not is rejected `not-applicable`
+        rather than ignored — a field that is silently dropped looks like a
+        field that was honored.
+
+        - `security` is **required** for `dividends`, optional for `fees`,
+          `fees-refund`, `taxes` and `tax-refund`, and rejected otherwise.
+        - `shares` applies to `dividends` only.
+        - `fees` applies to `dividends` only; `taxes` to `dividends` and
+          `interest`. These are the dialogs' rules, not the model's — the model
+          would accept a unit on anything.
+        - `exDate` requires an instrument and must not be after `date`.
+      additionalProperties: false
+      required: [type, account, date, amount]
+      properties:
+        type:
+          type: string
+          enum:
+            - deposit
+            - removal
+            - interest
+            - interest-charge
+            - dividends
+            - fees
+            - fees-refund
+            - taxes
+            - tax-refund
+        account:
+          type: string
+          description: UUID of the cash account the transaction is booked into.
+        security:
+          type: string
+          description: UUID of the instrument the transaction relates to.
+        date:
+          type: string
+          description: |
+            An ISO date (`2026-07-20`) or date-time (`2026-07-20T14:30`). A
+            plain date is taken as midnight, which is what the dialogs default
+            to when the user does not set a time.
+        exDate:
+          type: string
+          description: Ex-date, in the same two accepted forms as `date`.
+        amount:
+          allOf:
+            - $ref: "#/components/schemas/MonetaryValue"
+          description: |
+            The net cash flow, unsigned and in the account's currency. The
+            transaction type carries the direction.
+        grossAmount:
+          allOf:
+            - $ref: "#/components/schemas/MonetaryValue"
+          description: |
+            Optional. Checked against the amount, fees and taxes and rejected
+            `inconsistent-total` if it disagrees; it is never used in place of
+            the derivation.
+        fees:
+          $ref: "#/components/schemas/MonetaryValue"
+        taxes:
+          $ref: "#/components/schemas/MonetaryValue"
+        shares:
+          type: number
+          description: Number of shares, up to 8 decimal places.
+        note:
+          type: string
+
     Transaction:
       type: object
       description: One entry of the all-transactions list.
@@ -3688,7 +3839,11 @@ components:
             - unknown-field
             - unknown-parameter
             - duplicate-parameter
+            - unknown-reference
             - unknown-currency
+            - currency-mismatch
+            - not-applicable
+            - inconsistent-total
             - locked-by-transactions
             - exchange-rate-requires-currency
             - referenced
