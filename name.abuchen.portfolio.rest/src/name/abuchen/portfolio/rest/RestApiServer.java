@@ -36,7 +36,13 @@ public class RestApiServer
 
     private static final Set<String> IPV6_LOOPBACK = Set.of("::1", "0:0:0:0:0:0:0:1"); //$NON-NLS-1$ //$NON-NLS-2$
 
+    /**
+     * Enough for the desktop, where one local client asks one question at a time.
+     */
+    private static final int DEFAULT_WORKER_THREADS = 2;
+
     private final int port;
+    private final int workerThreads;
     private final Predicate<String> tokenValidator;
     private final Router router;
 
@@ -45,7 +51,23 @@ public class RestApiServer
 
     public RestApiServer(int port, Predicate<String> tokenValidator, Router router)
     {
+        this(port, DEFAULT_WORKER_THREADS, tokenValidator, router);
+    }
+
+    /**
+     * Sizes the HTTP worker pool. A host serving several clients from one process
+     * wants more than the desktop's two, where a single slow calculation queues
+     * everything behind it; the {@code calc(...)} seam already runs the computation
+     * off the host's model thread, so additional workers buy parallelism rather than
+     * a longer queue.
+     */
+    public RestApiServer(int port, int workerThreads, Predicate<String> tokenValidator, Router router)
+    {
+        if (workerThreads < 1)
+            throw new IllegalArgumentException("workerThreads must be at least 1"); //$NON-NLS-1$
+
         this.port = port;
+        this.workerThreads = workerThreads;
         this.tokenValidator = tokenValidator;
         this.router = router;
     }
@@ -54,7 +76,7 @@ public class RestApiServer
     {
         server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), port), 0);
         server.createContext("/", this::dispatch); //$NON-NLS-1$
-        executor = Executors.newFixedThreadPool(2);
+        executor = Executors.newFixedThreadPool(workerThreads);
         server.setExecutor(executor);
         server.start();
     }

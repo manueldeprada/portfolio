@@ -224,4 +224,39 @@ public class RestApiServerTest
         assertThat(response.statusCode(), is(404));
         assertThat(response.body(), containsString("problems/not-found"));
     }
+
+    /**
+     * The worker pool is two for the desktop, where one local client asks one question
+     * at a time; a host serving several clients from one process sizes it up. Nothing
+     * about the request path changes, which is the point of the test.
+     */
+    @Test
+    public void testAWiderWorkerPoolServesTheSameRequests() throws Exception
+    {
+        var router = new Router();
+        router.add("GET", "/v1/ping", request -> Response.json(200, JsonParser.parseString("{\"pong\":true}")));
+
+        var wide = new RestApiServer(0, 8, TOKEN::equals, router);
+        wide.start();
+        try
+        {
+            var response = http.send(
+                            HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + wide.getPort() + "/v1/ping"))
+                                            .header("Authorization", "Bearer " + TOKEN).GET().build(),
+                            HttpResponse.BodyHandlers.ofString());
+
+            assertThat(response.statusCode(), is(200));
+            assertThat(response.body(), containsString("pong"));
+        }
+        finally
+        {
+            wide.stop();
+        }
+    }
+
+    @Test(expected = IllegalArgumentException.class)
+    public void testAWorkerPoolOfZeroIsRejected()
+    {
+        new RestApiServer(0, 0, TOKEN::equals, new Router());
+    }
 }
