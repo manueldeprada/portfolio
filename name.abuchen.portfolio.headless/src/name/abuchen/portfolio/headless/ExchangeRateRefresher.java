@@ -34,7 +34,7 @@ import name.abuchen.portfolio.money.ExchangeRateProviderFactory;
  * file's change counter, because every converted figure in every cached response has
  * just changed.
  */
-public class ExchangeRateRefresher
+public class ExchangeRateRefresher implements HealthServer.Refresh
 {
     /**
      * The desktop's cadence, and for its reason: the ECB reference rates are
@@ -119,11 +119,13 @@ public class ExchangeRateRefresher
         }
     }
 
+    @Override
     public Optional<Instant> getLastUpdate()
     {
         return Optional.ofNullable(lastUpdate);
     }
 
+    @Override
     public Optional<String> getLastError()
     {
         return Optional.ofNullable(lastError);

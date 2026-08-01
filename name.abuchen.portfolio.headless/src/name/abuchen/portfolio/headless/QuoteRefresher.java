@@ -42,7 +42,7 @@ import name.abuchen.portfolio.online.RateLimitExceededException;
  * rather than once per instrument.</li>
  * </ul>
  */
-public class QuoteRefresher
+public class QuoteRefresher implements HealthServer.Refresh
 {
     /**
      * One instrument's update against one feed. Split by what it fetches, matching
@@ -203,11 +203,13 @@ public class QuoteRefresher
         fetchers.shutdownNow();
     }
 
+    @Override
     public Optional<Instant> getLastUpdate()
     {
         return Optional.ofNullable(lastUpdate);
     }
 
+    @Override
     public Optional<String> getLastError()
     {
         return Optional.ofNullable(lastError);

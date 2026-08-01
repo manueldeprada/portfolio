@@ -100,10 +100,12 @@ public class HeadlessConfigTest
     @Test
     public void testZeroDisablesRatherThanBeingRejected() throws IOException
     {
-        var config = read("{\"files\":[{\"path\":\"/tmp/a.xml\"}],\"autosaveSeconds\":0,\"quoteRefreshMinutes\":0}");
+        var config = read("{\"files\":[{\"path\":\"/tmp/a.xml\"}],\"autosaveSeconds\":0,\"quoteRefreshMinutes\":0,"
+                        + "\"healthPort\":0}");
 
         assertThat(config.autosave().isZero(), is(true));
         assertThat(config.quoteRefresh().isZero(), is(true));
+        assertThat(config.healthPort(), is(0));
     }
 
     @Test
@@ -116,6 +118,23 @@ public class HeadlessConfigTest
     public void testWorkerThreadsMustBeAtLeastOne()
     {
         assertRejected("{\"files\":[{\"path\":\"/tmp/a.xml\"}],\"workerThreads\":0}", "at least 1");
+    }
+
+    /**
+     * A config naming only "port" still gets a liveness probe, which is what makes a
+     * container health check work without a second setting.
+     */
+    @Test
+    public void testTheHealthPortDefaultsToOnePastTheApiPort() throws IOException
+    {
+        assertThat(read("{\"port\":6000,\"files\":[{\"path\":\"/tmp/a.xml\"}]}").healthPort(), is(6001));
+    }
+
+    @Test
+    public void testTheHealthPortMustDifferFromTheApiPort()
+    {
+        assertRejected("{\"port\":6000,\"healthPort\":6000,\"files\":[{\"path\":\"/tmp/a.xml\"}]}",
+                        "must differ from port");
     }
 
     /** A daemon with nothing to serve is a configuration mistake, not a valid state. */

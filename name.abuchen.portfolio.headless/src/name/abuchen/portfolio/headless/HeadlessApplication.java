@@ -33,10 +33,11 @@ import name.abuchen.portfolio.rest.RestApiWorkspace;
  * server - with only the host swapped. Nothing in the REST bundle changes, which is
  * what keeps this module purely additive against upstream.
  * <p>
- * Around that sit the three things the desktop gets from a user sitting in front of
+ * Around that sit the four things the desktop gets from a user sitting in front of
  * it, and a daemon has to do for itself: {@link ExchangeRateRefresher} (without
- * which every converted figure is wrong), {@link QuoteRefresher}, and
- * {@link AutoSaver} (without which every write is lost on exit).
+ * which every converted figure is wrong), {@link QuoteRefresher},
+ * {@link AutoSaver} (without which every write is lost on exit), and
+ * {@link HealthServer}.
  * <p>
  * Two things the desktop provides that are configuration here: which files are open
  * (loaded from the config at startup, and owned by this process for its lifetime),
@@ -63,6 +64,7 @@ public class HeadlessApplication implements IApplication
     private final CountDownLatch stopped = new CountDownLatch(1);
 
     private RestApiServer server;
+    private HealthServer healthServer;
     private HeadlessHost host;
     private AutoSaver autoSaver;
     private ExchangeRateRefresher exchangeRates;
@@ -183,6 +185,8 @@ public class HeadlessApplication implements IApplication
         if (!config.quoteRefresh().isZero())
             quotes.start(config.quoteRefresh());
 
+        startHealthServer(config, files);
+
         // A daemon is stopped with a signal, not by closing a window. Equinox does
         // call stop() when the framework shuts down cleanly, but the unsaved work
         // this now has to flush is worth not depending on that: the hook makes the
@@ -212,6 +216,12 @@ public class HeadlessApplication implements IApplication
             server.stop();
             server = null;
         }
+        if (healthServer != null)
+        {
+            healthServer.stop();
+            healthServer = null;
+        }
+
         shutdownComponents();
         stopped.countDown();
     }
@@ -248,6 +258,29 @@ public class HeadlessApplication implements IApplication
         locks.clear();
     }
 
+    /**
+     * A liveness probe is not correctness, so a port already taken is a warning and
+     * the daemon serves the API without one - unlike the API's own port, where
+     * something already listening means another instance owns these files.
+     */
+    private void startHealthServer(HeadlessConfig config, List<HeadlessHost.LoadedFile> files)
+    {
+        if (config.healthPort() == 0)
+            return;
+
+        healthServer = new HealthServer(config.healthPort(), config.port(), files, exchangeRates, quotes);
+        try
+        {
+            healthServer.start();
+            PortfolioLog.info("Health endpoint on http://127.0.0.1:" + config.healthPort() + "/health");
+        }
+        catch (IOException e)
+        {
+            healthServer = null;
+            PortfolioLog.warning("Could not bind the health endpoint on port " + config.healthPort() + " ("
+                            + e.getMessage() + "); serving the API without it.");
+        }
+    }
 
     /**
      * Loads one file and registers it as API-accessible. The registry is the same

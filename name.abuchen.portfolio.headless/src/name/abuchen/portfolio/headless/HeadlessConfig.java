@@ -23,6 +23,7 @@ import com.google.gson.JsonSyntaxException;
  * <pre>
  * {
  *   "port": 5712,
+ *   "healthPort": 5713,
  *   "workerThreads": 8,
  *   "files": [
  *     { "path": "/home/me/portfolio.xml", "alias": "main", "passwordEnv": "PP_PASSWORD_MAIN" }
@@ -39,7 +40,7 @@ import com.google.gson.JsonSyntaxException;
  * portfolio file and is meant to be readable, so an encrypted file's password is
  * taken from the named environment variable instead.
  */
-public record HeadlessConfig(int port, int workerThreads, List<FileEntry> files, List<String> clients,
+public record HeadlessConfig(int port, int healthPort, int workerThreads, List<FileEntry> files, List<String> clients,
                 Duration autosave, boolean backupOnStart, Duration exchangeRateTimeout, Duration quoteRefresh)
 {
     public record FileEntry(Path path, String alias, String passwordEnv)
@@ -97,6 +98,14 @@ public record HeadlessConfig(int port, int workerThreads, List<FileEntry> files,
         if (port < 0 || port > 65535)
             throw new IOException(source + ": port must be between 0 and 65535");
 
+        // One past the API port, so a config that names only "port" still gets a
+        // liveness probe. Zero disables it; the daemon serves the API either way.
+        var healthPort = json.has("healthPort") ? json.get("healthPort").getAsInt() : port + 1;
+        if (healthPort < 0 || healthPort > 65535)
+            throw new IOException(source + ": healthPort must be between 0 and 65535");
+        if (healthPort != 0 && healthPort == port)
+            throw new IOException(source + ": healthPort must differ from port");
+
         var workerThreads = json.has("workerThreads") ? json.get("workerThreads").getAsInt()
                         : DEFAULT_WORKER_THREADS;
         if (workerThreads < 1)
@@ -131,7 +140,7 @@ public record HeadlessConfig(int port, int workerThreads, List<FileEntry> files,
                 clients.add(element.getAsString());
         }
 
-        return new HeadlessConfig(port, workerThreads, List.copyOf(files), List.copyOf(clients),
+        return new HeadlessConfig(port, healthPort, workerThreads, List.copyOf(files), List.copyOf(clients),
                         seconds(json, "autosaveSeconds", DEFAULT_AUTOSAVE, source),
                         json.has("backupOnStart") ? json.get("backupOnStart").getAsBoolean() : true,
                         seconds(json, "exchangeRateTimeoutSeconds", DEFAULT_EXCHANGE_RATE_TIMEOUT, source),
