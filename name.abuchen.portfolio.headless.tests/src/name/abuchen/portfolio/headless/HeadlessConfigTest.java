@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 
 import org.junit.Assert;
 import org.junit.Rule;
@@ -67,6 +68,54 @@ public class HeadlessConfigTest
 
         assertThat(config.files().get(0).path(), is(Path.of("/tmp/a.xml")));
         assertThat(config.files().get(0).path().isAbsolute(), is(true));
+    }
+
+    @Test
+    public void testTheRefreshAndSaveDefaultsAreApplied() throws IOException
+    {
+        var config = read("{\"files\":[{\"path\":\"/tmp/a.xml\"}]}");
+
+        assertThat(config.workerThreads(), is(HeadlessConfig.DEFAULT_WORKER_THREADS));
+        assertThat(config.autosave(), is(HeadlessConfig.DEFAULT_AUTOSAVE));
+        assertThat(config.exchangeRateTimeout(), is(HeadlessConfig.DEFAULT_EXCHANGE_RATE_TIMEOUT));
+        assertThat(config.quoteRefresh(), is(HeadlessConfig.DEFAULT_QUOTE_REFRESH));
+        assertThat(config.backupOnStart(), is(true));
+    }
+
+    @Test
+    public void testEveryDurationIsReadInTheUnitItsKeyNames() throws IOException
+    {
+        var config = read("{\"files\":[{\"path\":\"/tmp/a.xml\"}],\"autosaveSeconds\":30,"
+                        + "\"exchangeRateTimeoutSeconds\":5,\"quoteRefreshMinutes\":15,\"workerThreads\":3,"
+                        + "\"backupOnStart\":false}");
+
+        assertThat(config.autosave(), is(Duration.ofSeconds(30)));
+        assertThat(config.exchangeRateTimeout(), is(Duration.ofSeconds(5)));
+        assertThat(config.quoteRefresh(), is(Duration.ofMinutes(15)));
+        assertThat(config.workerThreads(), is(3));
+        assertThat(config.backupOnStart(), is(false));
+    }
+
+    /** Zero is how each of the three loops is turned off, so it must be accepted. */
+    @Test
+    public void testZeroDisablesRatherThanBeingRejected() throws IOException
+    {
+        var config = read("{\"files\":[{\"path\":\"/tmp/a.xml\"}],\"autosaveSeconds\":0,\"quoteRefreshMinutes\":0}");
+
+        assertThat(config.autosave().isZero(), is(true));
+        assertThat(config.quoteRefresh().isZero(), is(true));
+    }
+
+    @Test
+    public void testANegativeDurationIsRejected()
+    {
+        assertRejected("{\"files\":[{\"path\":\"/tmp/a.xml\"}],\"autosaveSeconds\":-1}", "must not be negative");
+    }
+
+    @Test
+    public void testWorkerThreadsMustBeAtLeastOne()
+    {
+        assertRejected("{\"files\":[{\"path\":\"/tmp/a.xml\"}],\"workerThreads\":0}", "at least 1");
     }
 
     /** A daemon with nothing to serve is a configuration mistake, not a valid state. */

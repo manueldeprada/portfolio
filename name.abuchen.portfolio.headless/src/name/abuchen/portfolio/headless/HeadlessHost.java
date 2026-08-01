@@ -1,6 +1,9 @@
 package name.abuchen.portfolio.headless;
 
+import java.io.File;
+import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -38,8 +41,28 @@ public class HeadlessHost implements HostApplication
         private final String label;
         private final Client client;
         private final ExchangeRateProviderFactory factory;
+
+        /**
+         * Everything a client can observe: model edits and exchange-rate refreshes
+         * alike, because both change what a response says.
+         */
         private final AtomicLong changeCount = new AtomicLong();
-        private volatile boolean dirty;
+
+        /**
+         * The value {@link #changeCount} had at the last <em>model</em> change, and
+         * at the last successful save. Dirtiness is the difference between the two
+         * rather than a flag, which is what makes "a change arrived while the save
+         * was running" resolve to still-dirty instead of to a lost edit.
+         * <p>
+         * An exchange-rate refresh moves the counter but not these, so it invalidates
+         * every ETag without provoking a save of a file whose contents did not
+         * change.
+         */
+        private final AtomicLong lastModelChange = new AtomicLong();
+        private final AtomicLong lastSaved = new AtomicLong();
+
+        private volatile Instant savedAt;
+        private volatile String saveError;
 
         public LoadedFile(String path, String label, Client client)
         {
@@ -53,23 +76,22 @@ public class HeadlessHost implements HostApplication
             // Loading the client is itself a change: a consumer holding a counter
             // from before must not conclude that nothing happened. Same reasoning as
             // ClientInput's, and the counters have to mean the same thing for an
-            // ETag to be trustworthy whichever host served it.
+            // ETag to be trustworthy whichever host served it. It is not a *model*
+            // change, though - what was just read off disk is what is on disk.
             changeCount.incrementAndGet();
 
-            client.addPropertyChangeListener(event -> {
-                changeCount.incrementAndGet();
-                // Nothing persists yet (autosave is phase 2), so any change is an
-                // unsaved one. When autosave lands this clears after a successful
-                // save, and only then.
-                if (!"touch".equals(event.getPropertyName()))
-                    dirty = true;
-            });
+            client.addPropertyChangeListener(event -> lastModelChange.set(changeCount.incrementAndGet()));
         }
 
         @Override
         public String getPath()
         {
             return path;
+        }
+
+        public File getFile()
+        {
+            return new File(path);
         }
 
         @Override
@@ -99,7 +121,56 @@ public class HeadlessHost implements HostApplication
         @Override
         public boolean isDirty()
         {
-            return dirty;
+            return lastModelChange.get() != lastSaved.get();
+        }
+
+        /**
+         * The mark to pass to {@link #markSaved} afterwards. Read <em>before</em> the
+         * file is written, so a change that lands during the write leaves the file
+         * dirty and the next sweep saves it again - the desktop's own rule.
+         */
+        long saveMark()
+        {
+            return lastModelChange.get();
+        }
+
+        void markSaved(long mark)
+        {
+            lastSaved.set(mark);
+            savedAt = Instant.now();
+            saveError = null;
+        }
+
+        void markSaveFailed(String message)
+        {
+            saveError = message;
+        }
+
+        /**
+         * New exchange rates change every converted figure in every cached response,
+         * so the counter has to move even though nothing in the file did - otherwise
+         * a client holding an ETag from before the refresh keeps being told 304 and
+         * goes on showing the rates the daemon started with.
+         * <p>
+         * Also drops the factory's resolved-series cache: an update replaces the
+         * provider's series objects wholesale, and a cached path still points at the
+         * old ones. This is what {@code ClientInput#onExchangeRatesLoaded} does on
+         * the desktop, minus the counter bump, which the desktop arguably owes too.
+         */
+        void onExchangeRatesUpdated()
+        {
+            factory.clearCache();
+            changeCount.incrementAndGet();
+        }
+
+        Optional<Instant> getSavedAt()
+        {
+            return Optional.ofNullable(savedAt);
+        }
+
+        Optional<String> getSaveError()
+        {
+            return Optional.ofNullable(saveError);
         }
     }
 
@@ -107,7 +178,7 @@ public class HeadlessHost implements HostApplication
     private final ExecutorService modelThread;
     private final Thread owner;
 
-    public HeadlessHost(List<OpenFile> openFiles)
+    public HeadlessHost(List<? extends OpenFile> openFiles)
     {
         this.openFiles = List.copyOf(openFiles);
 
