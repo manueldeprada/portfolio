@@ -373,7 +373,7 @@ public class CreateTransactionTest
         TransactionsHandler.create(client, json("{\"type\":\"deposit\",\"account\":\"" + accountUuid(client)
                         + "\",\"date\":\"2026-07-20\",\"amount\":{\"value\":10,\"currency\":\"EUR\"}}"));
 
-        var items = TransactionsHandler.list(client, null, null, null, null).getAsJsonObject()
+        var items = TransactionsHandler.list(client, null, null, null, null, null, null).getAsJsonObject()
                         .getAsJsonArray("items");
         assertThat(items.size(), is(1));
         assertThat(items.get(0).getAsJsonObject().get("uuid").getAsString(), is(only(client).getUUID()));

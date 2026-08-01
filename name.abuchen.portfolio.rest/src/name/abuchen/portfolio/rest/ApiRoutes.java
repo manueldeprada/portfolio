@@ -219,8 +219,9 @@ public final class ApiRoutes
         router.add("GET", "/v1/files/{file}/transactions", calc(resolver, host,
                         (context, req) -> Response.json(200, TransactionsHandler.list(context.client(),
                                         req.queryParam("from"), req.queryParam("to"), req.queryParam("account"),
-                                        req.queryParam("security")))), //$NON-NLS-1$
-                        "from", "to", "account", "security"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                                        req.queryParam("security"), req.queryParam("limit"), //$NON-NLS-1$ //$NON-NLS-2$
+                                        req.queryParam("cursor")))), //$NON-NLS-1$
+                        "from", "to", "account", "security", "limit", "cursor"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$ //$NON-NLS-6$
         router.add("POST", "/v1/files/{file}/transactions", write(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
                         (file, req) -> {
                             var result = TransactionsHandler.create(file.getClient(), parseObject(req));
