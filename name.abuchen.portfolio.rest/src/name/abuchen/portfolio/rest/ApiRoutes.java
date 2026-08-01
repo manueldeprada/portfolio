@@ -217,9 +217,10 @@ public final class ApiRoutes
         // a calculation endpoint although it computes nothing: serializing every
         // transaction of a large file is itself long enough to be felt as UI jank
         router.add("GET", "/v1/files/{file}/transactions", calc(resolver, host,
-                        (context, req) -> Response.json(200,
-                                        TransactionsHandler.list(context.client(), req.queryParam("account"))),
-                        "account")); //$NON-NLS-1$
+                        (context, req) -> Response.json(200, TransactionsHandler.list(context.client(),
+                                        req.queryParam("from"), req.queryParam("to"), req.queryParam("account"),
+                                        req.queryParam("security")))), //$NON-NLS-1$
+                        "from", "to", "account", "security"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         router.add("POST", "/v1/files/{file}/transactions", write(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
                         (file, req) -> {
                             var result = TransactionsHandler.create(file.getClient(), parseObject(req));

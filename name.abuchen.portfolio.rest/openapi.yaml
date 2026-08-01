@@ -1665,13 +1665,46 @@ paths:
         and `counterOwner` the other side of a cross entry — and appears once.
         The signed `value`s of a cash account's entries therefore add up to the
         account's closing balance in `.../cash-accounts/{uuid}/balances`.
+
+        All filters are optional and combine with AND. Unfiltered, the response is
+        the file's entire transaction list.
       parameters:
+        - name: from
+          in: query
+          required: false
+          description: |
+            Earliest transaction date to include, **inclusive**. This endpoint
+            selects records rather than valuing the portfolio at two dates, so —
+            unlike a reporting period — `[from, to]` is closed at both ends. An
+            inverted range is rejected `400 invalid-range`.
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          required: false
+          description: Latest transaction date to include, **inclusive**.
+          schema:
+            type: string
+            format: date
         - name: account
           in: query
           required: false
           description: |
-            The uuid of a cash account or an investment account. An unknown
-            uuid is rejected `400 invalid-value` on `account`.
+            The uuid of a cash account or an investment account. With it the
+            list is every transaction that touches the account (see above)
+            rather than only those it owns. A uuid the file does not know is
+            rejected `400 invalid-value`.
+          schema:
+            type: string
+            format: uuid
+        - name: security
+          in: query
+          required: false
+          description: |
+            Instrument uuid. Only transactions carrying that instrument are
+            returned; a uuid the file does not know is rejected
+            `400 invalid-value`.
           schema:
             type: string
             format: uuid

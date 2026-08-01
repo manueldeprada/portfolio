@@ -165,7 +165,7 @@ public class TransactionsAccountFilterTest
     {
         var f = new Fixture();
 
-        var all = TransactionsHandler.list(f.client).getAsJsonObject().getAsJsonArray("items");
+        var all = TransactionsHandler.list(f.client, null).getAsJsonObject().getAsJsonArray("items");
         var uuids = new ArrayList<String>();
         all.forEach(e -> uuids.add(e.getAsJsonObject().get("uuid").getAsString()));
 

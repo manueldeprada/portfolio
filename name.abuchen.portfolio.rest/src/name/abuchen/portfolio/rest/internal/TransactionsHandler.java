@@ -5,7 +5,9 @@ import java.math.RoundingMode;
 import java.time.DateTimeException;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -31,6 +33,16 @@ import name.abuchen.portfolio.money.Values;
 
 public final class TransactionsHandler
 {
+    /**
+     * Newest first, with the transaction uuid as the tiebreak. Deliberately not
+     * {@link TransactionPair#BY_DATE}, whose last tiebreak is the identity hash
+     * code: that orders two otherwise equal transactions differently on every
+     * run, and an order that is not reproducible cannot carry a page boundary.
+     */
+    private static final Comparator<TransactionPair<?>> NEWEST_FIRST = Comparator
+                    .comparing((TransactionPair<?> pair) -> pair.getTransaction().getDateTime())
+                    .thenComparing((TransactionPair<?> pair) -> pair.getTransaction().getUUID()).reversed();
+
     /**
      * Which shape of request a type takes, and therefore which fields apply and
      * what gets built. A cash transaction lives in one account; everything else
@@ -111,48 +123,130 @@ public final class TransactionsHandler
      * first. {@link Client#getAllTransactions()} already de-duplicates a
      * buy/sell pair (only the investment-account side survives) and a transfer
      * (only the outbound leg survives).
-     */
-    public static JsonElement list(Client client)
-    {
-        return list(client, null);
-    }
-
-    /**
-     * As {@link #list(Client)}, optionally narrowed to one account. {@code
-     * account} is the uuid of a cash account or an investment account and
-     * selects every transaction that touches it: the cash legs of buys and
-     * sells and both legs of a transfer, not only the legs the account owns in
-     * the de-duplicated list. Each is reported from that account's side (its
-     * {@code owner.uuid} is the requested account, the other side is the {@code
-     * counterOwner}), once, so the signed {@code value}s of a cash account's
-     * entries add up to its balance.
+     * <p>
+     * All four filters are optional and combine with AND. {@code from} and
+     * {@code to} bound the transaction date inclusively - this endpoint selects
+     * records rather than valuing a portfolio at two dates, so unlike a
+     * reporting period the range is closed at both ends. {@code account} is the
+     * uuid of a cash account or an investment account and selects every transaction
+     * that touches it (see {@link #source}).
      */
     public static JsonElement list(Client client, String accountParam)
     {
-        var transactions = new ArrayList<TransactionPair<?>>();
+        return list(client, null, null, accountParam, null);
+    }
 
-        if (accountParam == null)
+    public static JsonElement list(Client client, String fromParam, String toParam, String accountParam,
+                    String securityParam)
+    {
+        var errors = new ArrayList<ApiException.FieldError>();
+
+        var from = parseDate("from", fromParam, errors);
+        var to = parseDate("to", toParam, errors);
+        var owner = parseOwner(client, accountParam, errors);
+        var security = parseSecurity(client, securityParam, errors);
+
+        if (!errors.isEmpty())
+            throw ApiException.badRequest(errors);
+
+        if (from != null && to != null && from.isAfter(to))
+            throw ApiException.badRequest(List.of(new ApiException.FieldError("to", "invalid-range",
+                            "to must not be before from")));
+
+        var selected = new ArrayList<TransactionPair<?>>();
+        for (TransactionPair<?> pair : source(client, owner))
         {
-            transactions.addAll(client.getAllTransactions());
+            if (matches(pair, from, to, security))
+                selected.add(pair);
         }
-        else
+        selected.sort(NEWEST_FIRST);
+
+        return EntityJson.envelope(selected, EntityJson::toJson);
+    }
+
+    private static boolean matches(TransactionPair<?> pair, LocalDate from, LocalDate to, String security)
+    {
+        var transaction = pair.getTransaction();
+
+        var date = transaction.getDateTime().toLocalDate();
+        if (from != null && date.isBefore(from))
+            return false;
+        if (to != null && date.isAfter(to))
+            return false;
+
+        return security == null
+                        || (transaction.getSecurity() != null && security.equals(transaction.getSecurity().getUUID()));
+    }
+
+    /**
+     * Without an account the de-duplicated list. With one, every transaction that
+     * touches it, each from that account's side: the cash legs of buys and sells and
+     * both legs of a transfer, which the de-duplicated list reports under only one
+     * of the two accounts.
+     */
+    private static List<TransactionPair<?>> source(Client client, String owner)
+    {
+        if (owner == null)
+            return new ArrayList<>(client.getAllTransactions());
+
+        var legs = new ArrayList<TransactionPair<?>>();
+        for (var account : client.getAccounts())
+            if (owner.equals(account.getUUID()))
+                account.getTransactions().forEach(t -> legs.add(new TransactionPair<>(account, t)));
+        for (var portfolio : client.getPortfolios())
+            if (owner.equals(portfolio.getUUID()))
+                portfolio.getTransactions().forEach(t -> legs.add(new TransactionPair<>(portfolio, t)));
+        return legs;
+    }
+
+    private static LocalDate parseDate(String field, String value, List<ApiException.FieldError> errors)
+    {
+        if (value == null)
+            return null;
+
+        try
         {
-            var cash = client.getAccounts().stream().filter(a -> accountParam.equals(a.getUUID())).findFirst();
-            var investment = client.getPortfolios().stream().filter(p -> accountParam.equals(p.getUUID()))
-                            .findFirst();
-
-            if (cash.isPresent())
-                cash.get().getTransactions().forEach(t -> transactions.add(new TransactionPair<>(cash.get(), t)));
-            else if (investment.isPresent())
-                investment.get().getTransactions()
-                                .forEach(t -> transactions.add(new TransactionPair<>(investment.get(), t)));
-            else
-                throw ApiException.badRequest(List.of(new ApiException.FieldError("account", "invalid-value",
-                                accountParam + " is not a known cash account or investment account")));
+            return LocalDate.parse(value);
         }
+        catch (DateTimeParseException e)
+        {
+            errors.add(new ApiException.FieldError(field, "invalid-value",
+                            field + " must be an ISO 8601 date (YYYY-MM-DD)"));
+            return null;
+        }
+    }
 
-        transactions.sort(TransactionPair.BY_DATE.reversed());
-        return EntityJson.envelope(transactions, EntityJson::toJson);
+    /**
+     * An unknown owner is a bad parameter, not a 404: the addressed resource is
+     * the transaction list of a file that does exist, and reporting it per
+     * field is what lets a caller passing several filters see which one of them
+     * the file does not know.
+     */
+    private static String parseOwner(Client client, String uuid, List<ApiException.FieldError> errors)
+    {
+        if (uuid == null)
+            return null;
+
+        var known = client.getAccounts().stream().map(Account::getUUID).anyMatch(uuid::equals)
+                        || client.getPortfolios().stream().map(Portfolio::getUUID).anyMatch(uuid::equals);
+        if (known)
+            return uuid;
+
+        errors.add(new ApiException.FieldError("account", "invalid-value",
+                        uuid + " is not a known cash account or investment account"));
+        return null;
+    }
+
+    private static String parseSecurity(Client client, String uuid, List<ApiException.FieldError> errors)
+    {
+        if (uuid == null)
+            return null;
+
+        if (client.getSecurities().stream().map(Security::getUUID).anyMatch(uuid::equals))
+            return uuid;
+
+        errors.add(new ApiException.FieldError("security", "invalid-value", uuid + " is not a known instrument"));
+        return null;
     }
 
     /**
