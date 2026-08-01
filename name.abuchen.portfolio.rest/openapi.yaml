@@ -894,6 +894,49 @@ paths:
         investment account's sell, transfer-out, delivery-outbound); positive
         otherwise. `grossValue`, `fees` and `taxes` are plain (unsigned)
         magnitudes in the transaction's own currency.
+
+        All filters are optional and combine with AND. Unfiltered, the response is
+        the file's entire transaction list.
+      parameters:
+        - name: from
+          in: query
+          required: false
+          description: |
+            Earliest transaction date to include, **inclusive**. This endpoint
+            selects records rather than valuing the portfolio at two dates, so —
+            unlike a reporting period — `[from, to]` is closed at both ends. An
+            inverted range is rejected `400 invalid-range`.
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          required: false
+          description: Latest transaction date to include, **inclusive**.
+          schema:
+            type: string
+            format: date
+        - name: account
+          in: query
+          required: false
+          description: |
+            The uuid of the transaction's owner — a cash account or an investment
+            account. One parameter covers both because a transaction has exactly
+            one owner; it is matched against the `owner.uuid` of the response
+            items. A uuid the file does not know is rejected `400 invalid-value`.
+          schema:
+            type: string
+            format: uuid
+        - name: security
+          in: query
+          required: false
+          description: |
+            Instrument uuid. Only transactions carrying that instrument are
+            returned; a uuid the file does not know is rejected
+            `400 invalid-value`.
+          schema:
+            type: string
+            format: uuid
       responses:
         "200":
           description: Every transaction, newest first
@@ -935,6 +978,8 @@ paths:
                           type: cash-account
         "304":
           $ref: "#/components/responses/NotModified"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
