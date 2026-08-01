@@ -27,6 +27,7 @@ import name.abuchen.portfolio.rest.internal.Router;
 import name.abuchen.portfolio.rest.internal.SecuritiesHandler;
 import name.abuchen.portfolio.rest.internal.SecurityPerformanceHandler;
 import name.abuchen.portfolio.rest.internal.SecurityPricesHandler;
+import name.abuchen.portfolio.rest.internal.TaxonomiesHandler;
 import name.abuchen.portfolio.rest.internal.TradesHandler;
 import name.abuchen.portfolio.rest.internal.VersionHandler;
 import name.abuchen.portfolio.rest.internal.mcp.McpEndpoint;
@@ -124,6 +125,9 @@ public final class ApiRoutes
                                         req.pathParam("uuid"), req.queryParam("date"), //$NON-NLS-1$ //$NON-NLS-2$
                                         req.queryParam("reportingCurrency")))), //$NON-NLS-1$
                         "date", "reportingCurrency"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        router.add("GET", "/v1/files/{file}/taxonomies", read(resolver, host,
+                        (client, req) -> Response.json(200, TaxonomiesHandler.list(client))));
 
         router.add("GET", "/v1/files/{file}/transactions", read(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
                         (client, req) -> Response.json(200, TransactionsHandler.list(client))));
