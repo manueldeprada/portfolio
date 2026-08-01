@@ -83,6 +83,18 @@ public class RestApiAddon
             // inputs without a client, so this is never null here
             return input.getExchangeRateProviderFacory();
         }
+
+        @Override
+        public long getChangeCount()
+        {
+            return input.getChangeCount();
+        }
+
+        @Override
+        public boolean isDirty()
+        {
+            return input.isDirty();
+        }
     }
 
     private final class Host implements HostApplication
