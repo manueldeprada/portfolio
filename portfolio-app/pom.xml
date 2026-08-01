@@ -51,6 +51,8 @@
 		<module>../name.abuchen.portfolio.tests</module>
 		<module>../name.abuchen.portfolio.rest</module>
 		<module>../name.abuchen.portfolio.rest.tests</module>
+		<module>../name.abuchen.portfolio.headless</module>
+		<module>../name.abuchen.portfolio.headless.tests</module>
 		<module>../name.abuchen.portfolio.ui</module>
 		<module>../name.abuchen.portfolio.ui.tests</module>
 		<module>../name.abuchen.portfolio.feature</module>
@@ -80,6 +82,18 @@
 	</repositories>
 
 	<profiles>
+		<!--
+			headless: the daemon product (core + rest + headless host, no UI).
+			Opt-in so an ordinary build, and -amd from any bundle it depends on,
+			does not pay for materializing a product.
+		-->
+		<profile>
+			<id>headless</id>
+			<modules>
+				<module>../portfolio-headless-product</module>
+			</modules>
+		</profile>
+
 		<profile>
 			<id>default</id>
 			<activation>
