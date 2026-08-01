@@ -3,8 +3,12 @@ package name.abuchen.portfolio.rest.internal;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.notNullValue;
+import static org.hamcrest.Matchers.nullValue;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 
 import org.junit.Assert;
@@ -60,7 +64,18 @@ public class TransactionsTest
 
     private JsonObject list(String from, String to, String account, String security)
     {
-        return TransactionsHandler.list(client, from, to, account, security).getAsJsonObject();
+        return list(from, to, account, security, null, null);
+    }
+
+    private JsonObject list(String from, String to, String account, String security, String limit, String cursor)
+    {
+        return TransactionsHandler.list(client, from, to, account, security, limit, cursor).getAsJsonObject();
+    }
+
+    private static String nextCursor(JsonObject result)
+    {
+        var next = result.get("nextCursor");
+        return next == null ? null : next.getAsString();
     }
 
     private static List<String> dates(JsonObject result)
@@ -181,6 +196,98 @@ public class TransactionsTest
             assertThat(e.getErrors().get(1).field(), is("account"));
             assertThat(e.getErrors().get(2).field(), is("security"));
         }
+    }
+
+    /**
+     * The default must stay "everything": the one existing consumer loads a
+     * file's transactions once and filters locally, so pagination has to be
+     * opt-in.
+     */
+    @Test
+    public void testWithoutALimitTheWholeListComesBackWithoutACursor()
+    {
+        var result = list(null, null, null, null);
+
+        assertThat(dates(result).size(), is(5));
+        assertThat(nextCursor(result), is(nullValue()));
+    }
+
+    @Test
+    public void testALimitYieldsExactlyThatManyPlusACursor()
+    {
+        var result = list(null, null, null, null, "2", null);
+
+        assertThat(dates(result), contains("2024-03-01T00:00", "2024-02-15T00:00"));
+        assertThat(nextCursor(result), is(notNullValue()));
+    }
+
+    @Test
+    public void testFollowingTheCursorHasNoOverlapAndNoGap()
+    {
+        var whole = dates(list(null, null, null, null));
+
+        var collected = new ArrayList<String>();
+        String cursor = null;
+        do
+        {
+            var page = list(null, null, null, null, "2", cursor);
+            collected.addAll(dates(page));
+            cursor = nextCursor(page);
+        }
+        while (cursor != null);
+
+        assertThat(collected, is(whole));
+    }
+
+    /** A page that exhausts the list carries no cursor, even when it is full. */
+    @Test
+    public void testTheLastPageHasNoCursor()
+    {
+        var exact = list(null, null, null, null, "5", null);
+        assertThat(dates(exact).size(), is(5));
+        assertThat(nextCursor(exact), is(nullValue()));
+
+        var remainder = list(null, null, null, null, "3", nextCursor(list(null, null, null, null, "3", null)));
+        assertThat(dates(remainder), contains("2024-01-05T00:00", "2024-01-01T00:00"));
+        assertThat(nextCursor(remainder), is(nullValue()));
+    }
+
+    /**
+     * A cursor carries a position, not a query - so the filters have to be
+     * repeated, and when they are the second page is the continuation of the
+     * filtered list rather than of the whole file.
+     */
+    @Test
+    public void testACursorKeepsTheFilters()
+    {
+        var first = list(null, null, null, apple.getUUID(), "1", null);
+        assertThat(dates(first), contains("2024-03-01T00:00"));
+
+        var second = list(null, null, null, apple.getUUID(), "1", nextCursor(first));
+        assertThat(dates(second), contains("2024-02-15T00:00"));
+        assertThat(nextCursor(second), is(nullValue()));
+    }
+
+    @Test
+    public void testAnUnusableLimitIsRejected()
+    {
+        assertFieldError(() -> list(null, null, null, null, "0", null), "limit", "invalid-value");
+        assertFieldError(() -> list(null, null, null, null, "1001", null), "limit", "invalid-value");
+        assertFieldError(() -> list(null, null, null, null, "all", null), "limit", "invalid-value");
+    }
+
+    @Test
+    public void testAMalformedCursorIsRejected()
+    {
+        assertFieldError(() -> list(null, null, null, null, "2", "not a cursor!"), "cursor", "invalid-value");
+        assertFieldError(() -> list(null, null, null, null, "2", encode("no-separator")), "cursor", "invalid-value");
+        assertFieldError(() -> list(null, null, null, null, "2", encode("yesterday|some-uuid")), "cursor",
+                        "invalid-value");
+    }
+
+    private static String encode(String raw)
+    {
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(raw.getBytes(StandardCharsets.UTF_8));
     }
 
     private static void assertFieldError(Runnable call, String field, String code)

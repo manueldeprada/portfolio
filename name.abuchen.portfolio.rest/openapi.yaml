@@ -937,9 +937,35 @@ paths:
           schema:
             type: string
             format: uuid
+        - name: limit
+          in: query
+          required: false
+          description: |
+            Maximum number of transactions to return. **Pagination is opt-in: the
+            default is the entire (filtered) list**, so a client that loads a file's
+            transactions once and filters locally keeps working by omitting this
+            parameter. Must be between 1 and 1000; anything else is rejected
+            `400 invalid-value`.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+        - name: cursor
+          in: query
+          required: false
+          description: |
+            A `nextCursor` from the previous page; the response resumes strictly
+            after that page's last item. **Opaque** — do not construct or parse
+            one; its encoding is not API surface and may change. A cursor carries
+            a position, not a query, so the filters must be repeated alongside it
+            (with different filters the position is still well defined, but the
+            result is not a continuation of anything). Malformed values are
+            rejected `400 invalid-value`.
+          schema:
+            type: string
       responses:
         "200":
-          description: Every transaction, newest first
+          description: The matching transactions, newest first
           headers:
             ETag:
               description: |
@@ -957,6 +983,12 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/Transaction"
+                  nextCursor:
+                    type: string
+                    description: |
+                      Pass as `cursor` to fetch the next page. **Absent on the last
+                      page** — its absence, not an empty `items`, is how a client
+                      knows it is done. Never present without `limit`.
               examples:
                 default:
                   value:

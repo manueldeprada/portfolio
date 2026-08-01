@@ -111,7 +111,8 @@ public final class ApiRoutes
         router.add("GET", "/v1/files/{file}/transactions", calc(resolver, host,
                         (context, req) -> Response.json(200, TransactionsHandler.list(context.client(),
                                         req.queryParam("from"), req.queryParam("to"), req.queryParam("account"),
-                                        req.queryParam("security")))));
+                                        req.queryParam("security"), req.queryParam("limit"),
+                                        req.queryParam("cursor")))));
 
         router.add("GET", "/v1/files/{file}/holdings", calc(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
                         (context, req) -> Response.json(200, HoldingsHandler.list(context.client(), context.factory(),

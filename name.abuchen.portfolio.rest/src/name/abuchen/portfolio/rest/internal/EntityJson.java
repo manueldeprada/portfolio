@@ -75,6 +75,19 @@ public final class EntityJson
         return envelope(items);
     }
 
+    /**
+     * The envelope of a page. {@code nextCursor} is omitted when null: its
+     * absence is what tells a client it has reached the last page, so an
+     * explicit null would be a second, weaker way of saying the same thing.
+     */
+    public static <T> JsonObject envelope(Collection<T> entities, Function<T, JsonObject> mapper, String nextCursor)
+    {
+        var json = envelope(entities, mapper);
+        if (nextCursor != null)
+            json.addProperty("nextCursor", nextCursor); //$NON-NLS-1$
+        return json;
+    }
+
     public static JsonObject toJson(Client client, Security security)
     {
         var json = new JsonObject();
