@@ -9,5 +9,6 @@ Bundle-Vendor: Andreas Buchen
 Require-Bundle: org.junit,
  org.hamcrest.core,
  org.hamcrest.library,
+ org.apache.servicemix.bundles.xpp3,
  name.abuchen.portfolio.junit
 Automatic-Module-Name: name.abuchen.portfolio.headless.tests
