@@ -13,6 +13,7 @@ import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
 import jakarta.inject.Inject;
@@ -79,6 +80,7 @@ public class ClientInput
     private ReportingPeriods reportingPeriods;
 
     private boolean isDirty = false;
+    private final AtomicLong changeCount = new AtomicLong();
     private List<Job> regularJobs = new ArrayList<>();
     private List<Runnable> disposeJobs = new ArrayList<>();
     private List<ClientInputListener> listeners = new ArrayList<>();
@@ -134,6 +136,21 @@ public class ClientInput
     public boolean isDirty()
     {
         return isDirty;
+    }
+
+    /**
+     * A counter that grows with every change to the client, so that a consumer
+     * can tell "unchanged since I last looked" without comparing the model
+     * itself. Only equality carries meaning: the value counts notifications,
+     * not edits, it is scoped to this instance, and it starts over when the
+     * application restarts.
+     * <p/>
+     * Readable from any thread; the increments come from the client's property
+     * change notifications, which are not confined to the UI thread.
+     */
+    public long getChangeCount()
+    {
+        return changeCount.get();
     }
 
     /**
@@ -705,6 +722,11 @@ public class ClientInput
 
         this.client = client;
 
+        // the client itself is new, which is a change like any other - a
+        // consumer holding a counter from before the load must not conclude
+        // that nothing happened
+        changeCount.incrementAndGet();
+
         IEclipseContext c2 = EclipseContextFactory.create();
         c2.set(Client.class, client);
         this.exchangeRateProviderFacory = ContextInjectionFactory //
@@ -714,6 +736,12 @@ public class ClientInput
 
         PropertyChangeListener listener = event -> {
             boolean recalculate = !"touch".equals(event.getPropertyName()); //$NON-NLS-1$
+
+            // every model change funnels through here, so this is the one place
+            // the counter has to be bumped; deliberately before scheduleDirty,
+            // which coalesces its notifications and would therefore lose
+            // changes the counter must not lose
+            changeCount.incrementAndGet();
 
             // convenience: Client#markDirty can be called on any thread, but
             // ClientInputListener#onDirty will always be called on the UI

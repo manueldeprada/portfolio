@@ -166,6 +166,8 @@ public final class EntityJson
             json.addProperty("alias", access.alias()); //$NON-NLS-1$
         json.addProperty("label", file.getLabel()); //$NON-NLS-1$
         json.addProperty("path", file.getPath()); //$NON-NLS-1$
+        json.addProperty("changeId", file.getChangeCount()); //$NON-NLS-1$
+        json.addProperty("dirty", file.isDirty()); //$NON-NLS-1$
         return json;
     }
 

@@ -233,6 +233,10 @@ paths:
       description: |
         Lists only files that are **open and enabled**. Address a file in the
         `{file}` path segment below by either its `id` or its `alias`.
+
+        Each item carries the file's `changeId` and `dirty` flag, so this one cheap
+        call tells a client whether anything in a file moved since it last looked —
+        including edits the user made in the desktop application.
       responses:
         "200":
           description: The addressable files
@@ -254,6 +258,8 @@ paths:
                         alias: main
                         label: portfolio.xml
                         path: /Users/me/portfolio.xml
+                        changeId: 42
+                        dirty: false
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -1448,7 +1454,7 @@ components:
     File:
       type: object
       description: An open, enabled portfolio file you may address.
-      required: [id, label, path]
+      required: [id, label, path, changeId, dirty]
       properties:
         id:
           type: string
@@ -1466,6 +1472,22 @@ components:
           description: |
             The file's path on disk. Identity is keyed by path, so a *different*
             file copied over an enabled path inherits that path's access.
+        changeId:
+          type: integer
+          format: int64
+          description: |
+            A counter that grows with every change to the file's model. Compare it
+            with the one you saw last to learn whether the data moved — including
+            edits the user made in the desktop application, which a client has no
+            other way to notice. **Only equality is meaningful**: it is not a count
+            of edits, not ordered against other files, and it starts over when the
+            application restarts, so never persist it across a session.
+        dirty:
+          type: boolean
+          description: |
+            Whether the file holds changes the user has not saved. Writes through
+            this API set it, exactly as an edit in the UI does; only the user
+            clears it by saving.
 
     PairingRequestCreated:
       type: object
