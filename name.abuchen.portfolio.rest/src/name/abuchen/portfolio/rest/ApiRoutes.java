@@ -11,6 +11,7 @@ import name.abuchen.portfolio.model.Client;
 import name.abuchen.portfolio.money.ExchangeRateProviderFactory;
 import name.abuchen.portfolio.rest.internal.AccountsHandler;
 import name.abuchen.portfolio.rest.internal.ApiException;
+import name.abuchen.portfolio.rest.internal.ConditionalGet;
 import name.abuchen.portfolio.rest.internal.FileResolver;
 import name.abuchen.portfolio.rest.internal.FilesHandler;
 import name.abuchen.portfolio.rest.internal.HoldingsHandler;
@@ -37,6 +38,8 @@ import name.abuchen.portfolio.rest.spi.OpenFile;
  * writes are additionally rejected with 423 while an application-modal dialog
  * is open or the user edits a table cell. Calculation endpoints only resolve
  * the {file} scope on the UI thread and compute on the HTTP worker thread.
+ * Every file-scoped read answers with an ETag and honors If-None-Match, which
+ * lets a client skip the work rather than only the bytes.
  */
 public final class ApiRoutes
 {
@@ -150,17 +153,29 @@ public final class ApiRoutes
         return request -> host.syncExec(() -> handler.handle(request));
     }
 
+    /**
+     * For read-only endpoints served from the UI thread: resolves the {file}
+     * scope, derives the validator from the file's change counter in the same
+     * turn - a counter read afterwards could already describe a different
+     * snapshot - and only then runs the handler, so a client that already holds
+     * the representation costs nothing but the resolve.
+     */
     private static Router.Handler read(FileResolver resolver, HostApplication host,
                     BiFunction<Client, Request, Response> body)
     {
         return onUiThread(host, request -> {
             var resolved = resolver.resolve(request.pathParam("file")); //$NON-NLS-1$
-            return body.apply(resolved.file().getClient(), request);
+
+            var etag = ConditionalGet.etag(resolved.file().getChangeCount(), request);
+            if (ConditionalGet.isNotModified(request, etag))
+                return ConditionalGet.notModified(etag);
+
+            return body.apply(resolved.file().getClient(), request).withHeader(ConditionalGet.ETAG, etag);
         });
     }
 
     /** what a calculation endpoint needs, fetched from the host on the UI thread */
-    /* package */ record CalcContext(Client client, ExchangeRateProviderFactory factory)
+    /* package */ record CalcContext(Client client, ExchangeRateProviderFactory factory, long changeCount)
     {
     }
 
@@ -176,12 +191,23 @@ public final class ApiRoutes
                     BiFunction<CalcContext, Request, Response> body)
     {
         return request -> {
-            var context = host.syncExec(() -> {
-                var file = resolver.resolve(request.pathParam("file")).file(); //$NON-NLS-1$
-                return new CalcContext(file.getClient(), file.getExchangeRateProviderFactory());
-            });
-            return body.apply(context, request);
+            var context = resolveForCalc(resolver, host, request);
+
+            var etag = ConditionalGet.etag(context.changeCount(), request);
+            if (ConditionalGet.isNotModified(request, etag))
+                return ConditionalGet.notModified(etag);
+
+            return body.apply(context, request).withHeader(ConditionalGet.ETAG, etag);
         };
+    }
+
+    private static CalcContext resolveForCalc(FileResolver resolver, HostApplication host, Request request)
+                    throws Exception
+    {
+        return host.syncExec(() -> {
+            var file = resolver.resolve(request.pathParam("file")).file(); //$NON-NLS-1$
+            return new CalcContext(file.getClient(), file.getExchangeRateProviderFactory(), file.getChangeCount());
+        });
     }
 
     private static Router.Handler write(FileResolver resolver, HostApplication host,

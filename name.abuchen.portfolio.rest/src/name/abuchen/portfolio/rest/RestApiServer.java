@@ -4,6 +4,8 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -86,7 +88,7 @@ public class RestApiServer
                 var match = router.match(exchange.getRequestMethod(), exchange.getRequestURI().getPath());
                 var request = new Request(exchange.getRequestMethod(), exchange.getRequestURI().getPath(),
                                 match.pathParams(), Request.parseQuery(exchange.getRequestURI().getRawQuery()),
-                                exchange.getRequestBody().readAllBytes());
+                                headersOf(exchange), exchange.getRequestBody().readAllBytes());
                 response = match.handler().handle(request);
             }
             catch (ApiException e)
@@ -109,6 +111,22 @@ public class RestApiServer
         {
             exchange.close();
         }
+    }
+
+    /**
+     * The request headers, flattened to their first value. Nothing the API
+     * reads is a list header, and a client that repeats one is asking for the
+     * first to win rather than for the values to be joined.
+     */
+    private static Map<String, String> headersOf(HttpExchange exchange)
+    {
+        var headers = new HashMap<String, String>();
+        for (var entry : exchange.getRequestHeaders().entrySet())
+        {
+            if (!entry.getValue().isEmpty())
+                headers.put(entry.getKey(), entry.getValue().get(0));
+        }
+        return Map.copyOf(headers);
     }
 
     /**

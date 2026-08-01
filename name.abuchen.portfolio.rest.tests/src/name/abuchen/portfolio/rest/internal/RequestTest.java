@@ -54,5 +54,18 @@ public class RequestTest
     {
         var request = new Request("GET", "/path", Map.of(), new byte[0]);
         assertThat(request.queryParam("date"), is(nullValue()));
+        assertThat(request.header("If-None-Match"), is(nullValue()));
+    }
+
+    /** header names are case-insensitive, and a client may spell them any way */
+    @Test
+    public void testHeaderAccessorIgnoresCase()
+    {
+        var request = new Request("GET", "/path", Map.of(), Map.of(), Map.of("If-None-Match", "\"abc\""),
+                        new byte[0]);
+
+        assertThat(request.header("if-none-match"), is("\"abc\""));
+        assertThat(request.header("IF-NONE-MATCH"), is("\"abc\""));
+        assertThat(request.header("If-Match"), is(nullValue()));
     }
 }

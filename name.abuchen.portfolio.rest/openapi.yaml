@@ -63,6 +63,25 @@ info:
     portfolio data**. Calling any method that a path does not list returns
     `405 method-not-allowed`.
 
+    ## Caching: change counter and ETags
+
+    Every file carries a **change counter** (`changeId` on `GET /v1/files`) that
+    grows with every change to its model — whether the change came through this
+    API or from the user editing in the desktop application. Only equality is
+    meaningful, and it starts over when the application restarts, so never persist
+    it: compare it with the one you saw a moment ago, nothing more.
+
+    Every **file-scoped read** answers with a strong `ETag` and honors
+    `If-None-Match`. The validator is derived from the file's change counter, the
+    current date and the request itself, so it is known *before* the response is
+    computed: a `304` skips the snapshot or the performance index entirely, not
+    just the transfer. That is why sending back the tag you hold is worth doing
+    even on a loopback connection where bandwidth is free.
+
+    The current date is part of the validator because a response that defaults to
+    "today" is a different response tomorrow; a tag therefore expires on its own at
+    midnight, without the server tracking anything.
+
     ## Writes are not saved
 
     A write (`PATCH`, `DELETE`) mutates the **in-memory** file and marks it dirty,
@@ -270,6 +289,7 @@ paths:
   /v1/files/{file}/instruments:
     parameters:
       - $ref: "#/components/parameters/File"
+      - $ref: "#/components/parameters/IfNoneMatch"
     get:
       operationId: listInstruments
       tags: [Instruments]
@@ -277,6 +297,13 @@ paths:
       responses:
         "200":
           description: The instruments in the file
+          headers:
+            ETag:
+              description: |
+                The validator of this representation. Send it back as
+                `If-None-Match` on the next request for the same URL.
+              schema:
+                type: string
           content:
             application/json:
               schema:
@@ -287,6 +314,8 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/Instrument"
+        "304":
+          $ref: "#/components/responses/NotModified"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -306,9 +335,18 @@ paths:
       operationId: getInstrument
       tags: [Instruments]
       summary: Read a single instrument
+      parameters:
+        - $ref: "#/components/parameters/IfNoneMatch"
       responses:
         "200":
           description: The instrument
+          headers:
+            ETag:
+              description: |
+                The validator of this representation. Send it back as
+                `If-None-Match` on the next request for the same URL.
+              schema:
+                type: string
           content:
             application/json:
               schema:
@@ -323,6 +361,8 @@ paths:
                     wkn: "865985"
                     tickerSymbol: AAPL
                     note: Core holding
+        "304":
+          $ref: "#/components/responses/NotModified"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -409,6 +449,7 @@ paths:
     parameters:
       - $ref: "#/components/parameters/File"
       - $ref: "#/components/parameters/Uuid"
+      - $ref: "#/components/parameters/IfNoneMatch"
     get:
       operationId: listInstrumentPrices
       tags: [Instruments]
@@ -441,6 +482,13 @@ paths:
       responses:
         "200":
           description: The instrument's price history over the requested range.
+          headers:
+            ETag:
+              description: |
+                The validator of this representation. Send it back as
+                `If-None-Match` on the next request for the same URL.
+              schema:
+                type: string
           content:
             application/json:
               schema:
@@ -459,6 +507,8 @@ paths:
                         value: 184.25
                       - date: "2024-01-04"
                         value: 181.91
+        "304":
+          $ref: "#/components/responses/NotModified"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -475,6 +525,7 @@ paths:
   /v1/files/{file}/instruments/attribute-types:
     parameters:
       - $ref: "#/components/parameters/File"
+      - $ref: "#/components/parameters/IfNoneMatch"
     get:
       operationId: listInstrumentAttributeTypes
       tags: [Instruments]
@@ -488,6 +539,13 @@ paths:
       responses:
         "200":
           description: The applicable attribute definitions.
+          headers:
+            ETag:
+              description: |
+                The validator of this representation. Send it back as
+                `If-None-Match` on the next request for the same URL.
+              schema:
+                type: string
           content:
             application/json:
               schema:
@@ -498,6 +556,8 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/AttributeDefinition"
+        "304":
+          $ref: "#/components/responses/NotModified"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -512,6 +572,7 @@ paths:
   /v1/files/{file}/cash-accounts:
     parameters:
       - $ref: "#/components/parameters/File"
+      - $ref: "#/components/parameters/IfNoneMatch"
     get:
       operationId: listCashAccounts
       tags: [Cash accounts]
@@ -531,6 +592,13 @@ paths:
       responses:
         "200":
           description: The cash accounts in the file
+          headers:
+            ETag:
+              description: |
+                The validator of this representation. Send it back as
+                `If-None-Match` on the next request for the same URL.
+              schema:
+                type: string
           content:
             application/json:
               schema:
@@ -541,6 +609,8 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/CashAccount"
+        "304":
+          $ref: "#/components/responses/NotModified"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -556,6 +626,7 @@ paths:
     parameters:
       - $ref: "#/components/parameters/File"
       - $ref: "#/components/parameters/Uuid"
+      - $ref: "#/components/parameters/IfNoneMatch"
     get:
       operationId: getCashAccount
       tags: [Cash accounts]
@@ -571,6 +642,13 @@ paths:
       responses:
         "200":
           description: The cash account
+          headers:
+            ETag:
+              description: |
+                The validator of this representation. Send it back as
+                `If-None-Match` on the next request for the same URL.
+              schema:
+                type: string
           content:
             application/json:
               schema:
@@ -585,6 +663,8 @@ paths:
                     balance:
                       value: "1234.56"
                       currency: EUR
+        "304":
+          $ref: "#/components/responses/NotModified"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -599,6 +679,7 @@ paths:
   /v1/files/{file}/investment-accounts:
     parameters:
       - $ref: "#/components/parameters/File"
+      - $ref: "#/components/parameters/IfNoneMatch"
     get:
       operationId: listInvestmentAccounts
       tags: [Investment accounts]
@@ -628,6 +709,13 @@ paths:
       responses:
         "200":
           description: The investment accounts in the file
+          headers:
+            ETag:
+              description: |
+                The validator of this representation. Send it back as
+                `If-None-Match` on the next request for the same URL.
+              schema:
+                type: string
           content:
             application/json:
               schema:
@@ -638,6 +726,8 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/InvestmentAccount"
+        "304":
+          $ref: "#/components/responses/NotModified"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -653,6 +743,7 @@ paths:
     parameters:
       - $ref: "#/components/parameters/File"
       - $ref: "#/components/parameters/Uuid"
+      - $ref: "#/components/parameters/IfNoneMatch"
     get:
       operationId: getInvestmentAccount
       tags: [Investment accounts]
@@ -679,6 +770,13 @@ paths:
       responses:
         "200":
           description: The investment account
+          headers:
+            ETag:
+              description: |
+                The validator of this representation. Send it back as
+                `If-None-Match` on the next request for the same URL.
+              schema:
+                type: string
           content:
             application/json:
               schema:
@@ -693,6 +791,8 @@ paths:
                     value:
                       value: "10520.75"
                       currency: EUR
+        "304":
+          $ref: "#/components/responses/NotModified"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -707,6 +807,7 @@ paths:
   /v1/files/{file}/taxonomies:
     parameters:
       - $ref: "#/components/parameters/File"
+      - $ref: "#/components/parameters/IfNoneMatch"
     get:
       operationId: listTaxonomies
       tags: [Taxonomies]
@@ -723,6 +824,13 @@ paths:
       responses:
         "200":
           description: The taxonomies defined in the file.
+          headers:
+            ETag:
+              description: |
+                The validator of this representation. Send it back as
+                `If-None-Match` on the next request for the same URL.
+              schema:
+                type: string
           content:
             application/json:
               schema:
@@ -747,6 +855,8 @@ paths:
                               - name: North America
                           - name: Cash
                             color: "#c4e8e8"
+        "304":
+          $ref: "#/components/responses/NotModified"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -761,6 +871,7 @@ paths:
   /v1/files/{file}/transactions:
     parameters:
       - $ref: "#/components/parameters/File"
+      - $ref: "#/components/parameters/IfNoneMatch"
     get:
       operationId: listTransactions
       tags: [Transactions]
@@ -779,6 +890,13 @@ paths:
       responses:
         "200":
           description: Every transaction, newest first
+          headers:
+            ETag:
+              description: |
+                The validator of this representation. Send it back as
+                `If-None-Match` on the next request for the same URL.
+              schema:
+                type: string
           content:
             application/json:
               schema:
@@ -808,6 +926,8 @@ paths:
                           uuid: c4b2a1e0-3f6d-4a2e-8b1c-5d7f9a0e2c46
                           name: Broker Cash
                           type: cash-account
+        "304":
+          $ref: "#/components/responses/NotModified"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -822,6 +942,7 @@ paths:
   /v1/files/{file}/holdings:
     parameters:
       - $ref: "#/components/parameters/File"
+      - $ref: "#/components/parameters/IfNoneMatch"
     get:
       operationId: listHoldings
       tags: [Holdings]
@@ -885,6 +1006,13 @@ paths:
       responses:
         "200":
           description: The holdings at the valuation date
+          headers:
+            ETag:
+              description: |
+                The validator of this representation. Send it back as
+                `If-None-Match` on the next request for the same URL.
+              schema:
+                type: string
           content:
             application/json:
               schema:
@@ -920,6 +1048,8 @@ paths:
                         name: Broker Cash
                         valuation: { value: 500, currency: EUR }
                         weight: 0.3125
+        "304":
+          $ref: "#/components/responses/NotModified"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -936,6 +1066,7 @@ paths:
   /v1/files/{file}/performance:
     parameters:
       - $ref: "#/components/parameters/File"
+      - $ref: "#/components/parameters/IfNoneMatch"
     get:
       operationId: getPerformance
       tags: [Performance]
@@ -1010,6 +1141,13 @@ paths:
       responses:
         "200":
           description: The performance over the interval
+          headers:
+            ETag:
+              description: |
+                The validator of this representation. Send it back as
+                `If-None-Match` on the next request for the same URL.
+              schema:
+                type: string
           content:
             application/json:
               schema:
@@ -1032,6 +1170,8 @@ paths:
                       currencyGains: { value: 210, currency: EUR }
                       netDeposits: { value: 5000, currency: EUR }
                       closingValue: { value: 111390, currency: EUR }
+        "304":
+          $ref: "#/components/responses/NotModified"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -1048,6 +1188,7 @@ paths:
   /v1/files/{file}/performance/series:
     parameters:
       - $ref: "#/components/parameters/File"
+      - $ref: "#/components/parameters/IfNoneMatch"
     get:
       operationId: getPerformanceSeries
       tags: [Performance]
@@ -1107,6 +1248,13 @@ paths:
       responses:
         "200":
           description: The daily index and its risk metrics
+          headers:
+            ETag:
+              description: |
+                The validator of this representation. Send it back as
+                `If-None-Match` on the next request for the same URL.
+              schema:
+                type: string
           content:
             application/json:
               schema:
@@ -1145,6 +1293,8 @@ paths:
                         investedCapital: 100000
                         netDeposits: 0
                         drawdown: 0
+        "304":
+          $ref: "#/components/responses/NotModified"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -1161,6 +1311,7 @@ paths:
   /v1/files/{file}/performance/securities:
     parameters:
       - $ref: "#/components/parameters/File"
+      - $ref: "#/components/parameters/IfNoneMatch"
     get:
       operationId: getSecurityPerformance
       tags: [Performance]
@@ -1220,6 +1371,13 @@ paths:
       responses:
         "200":
           description: The per-security performance over the interval
+          headers:
+            ETag:
+              description: |
+                The validator of this representation. Send it back as
+                `If-None-Match` on the next request for the same URL.
+              schema:
+                type: string
           content:
             application/json:
               schema:
@@ -1243,6 +1401,8 @@ paths:
                         fees: { value: -3, currency: EUR }
                         taxes: { value: 0, currency: EUR }
                         heldAtClose: true
+        "304":
+          $ref: "#/components/responses/NotModified"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -1259,6 +1419,7 @@ paths:
   /v1/files/{file}/performance/calendar:
     parameters:
       - $ref: "#/components/parameters/File"
+      - $ref: "#/components/parameters/IfNoneMatch"
     get:
       operationId: getPerformanceCalendar
       tags: [Performance]
@@ -1315,6 +1476,13 @@ paths:
       responses:
         "200":
           description: The monthly returns and activity
+          headers:
+            ETag:
+              description: |
+                The validator of this representation. Send it back as
+                `If-None-Match` on the next request for the same URL.
+              schema:
+                type: string
           content:
             application/json:
               schema:
@@ -1333,6 +1501,8 @@ paths:
                         taxes: -55
                         netTransfers: 1000
                         trades: { buys: 3, sells: 1, buyVolume: 4500, sellVolume: 900 }
+        "304":
+          $ref: "#/components/responses/NotModified"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -1349,6 +1519,7 @@ paths:
   /v1/files/{file}/trades:
     parameters:
       - $ref: "#/components/parameters/File"
+      - $ref: "#/components/parameters/IfNoneMatch"
     get:
       operationId: getTrades
       tags: [Performance]
@@ -1388,6 +1559,13 @@ paths:
       responses:
         "200":
           description: The paired trades
+          headers:
+            ETag:
+              description: |
+                The validator of this representation. Send it back as
+                `If-None-Match` on the next request for the same URL.
+              schema:
+                type: string
           content:
             application/json:
               schema:
@@ -1408,6 +1586,8 @@ paths:
                         holdingPeriodDays: 195
                         irr: 0.31
                         return: 0.175
+        "304":
+          $ref: "#/components/responses/NotModified"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -1447,6 +1627,16 @@ components:
       in: path
       required: true
       description: The `uuid` of the entity within the file
+      schema:
+        type: string
+    IfNoneMatch:
+      name: If-None-Match
+      in: header
+      required: false
+      description: |
+        The `ETag` of the representation you already hold. If it still applies,
+        the answer is `304` with no body — and the server skips the computation,
+        not just the transfer. A comma-separated list and `*` are accepted.
       schema:
         type: string
 
@@ -2744,6 +2934,16 @@ components:
         application/problem+json:
           schema:
             $ref: "#/components/schemas/Problem"
+
+    NotModified:
+      description: |
+        Your `If-None-Match` still matches, so the representation you hold is
+        current. No body, by RFC 9110 — reuse what you cached.
+      headers:
+        ETag:
+          description: The validator that matched, repeated for convenience.
+          schema:
+            type: string
 
     Unauthorized:
       description: |

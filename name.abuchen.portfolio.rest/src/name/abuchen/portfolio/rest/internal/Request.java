@@ -6,11 +6,17 @@ import java.util.HashMap;
 import java.util.Map;
 
 public record Request(String method, String path, Map<String, String> pathParams, Map<String, String> queryParams,
-                byte[] body)
+                Map<String, String> headers, byte[] body)
 {
     public Request(String method, String path, Map<String, String> pathParams, byte[] body)
     {
-        this(method, path, pathParams, Map.of(), body);
+        this(method, path, pathParams, Map.of(), Map.of(), body);
+    }
+
+    public Request(String method, String path, Map<String, String> pathParams, Map<String, String> queryParams,
+                    byte[] body)
+    {
+        this(method, path, pathParams, queryParams, Map.of(), body);
     }
 
     public String pathParam(String name)
@@ -22,6 +28,21 @@ public record Request(String method, String path, Map<String, String> pathParams
     public String queryParam(String name)
     {
         return queryParams.get(name);
+    }
+
+    /**
+     * The request header, or null if absent. Header names are case-insensitive
+     * by RFC 9110, and the callers here spell them the way the specification
+     * does, so the lookup - not the map - normalizes.
+     */
+    public String header(String name)
+    {
+        for (var entry : headers.entrySet())
+        {
+            if (entry.getKey().equalsIgnoreCase(name))
+                return entry.getValue();
+        }
+        return null;
     }
 
     /**
