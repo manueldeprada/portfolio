@@ -82,6 +82,13 @@ info:
     "today" is a different response tomorrow; a tag therefore expires on its own at
     midnight, without the server tracking anything.
 
+    A calculation endpoint samples the change counter before and after computing
+    and redoes the work if the user edited the file in between, so a response
+    never reports a state that half of it contradicts. If the model keeps moving,
+    the last result is served anyway but **without an `ETag`** — it may straddle
+    an edit, and nothing that may be wrong should become cacheable. Treat a
+    file-scoped read that carries no `ETag` as "do not store this".
+
     ## Writes are not saved
 
     A write (`PATCH`, `DELETE`) mutates the **in-memory** file and marks it dirty,

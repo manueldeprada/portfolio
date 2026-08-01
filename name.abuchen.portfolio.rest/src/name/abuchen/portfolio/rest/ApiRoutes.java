@@ -180,12 +180,24 @@ public final class ApiRoutes
     }
 
     /**
+     * How often a calculation is redone before its result is served without a
+     * validator. A user edit landing inside one calculation is already rare;
+     * three in a row means the model changes faster than it can be reported,
+     * and waiting longer would only hold the connection open.
+     */
+    private static final int CALC_ATTEMPTS = 3;
+
+    /**
      * For read-only calculation endpoints: resolves the {file} scope on the UI
-     * thread, but runs the calculation itself on the HTTP worker thread so
-     * that an expensive computation cannot freeze the UI. Deliberately without
-     * a consistency guard: a concurrent user edit may - rarely - yield a
-     * transiently inconsistent response or an internal error; retrying is
-     * cheap for the client, blocking the UI is not.
+     * thread, but runs the calculation itself on the HTTP worker thread so that
+     * an expensive computation cannot freeze the UI. The change counter is
+     * sampled on the UI thread before and after, and the calculation is redone
+     * when it moved - which turns "a concurrent user edit may rarely yield a
+     * transiently inconsistent response" into a guarantee, without ever
+     * blocking the UI, because the retry is a repeat of work that was already
+     * cheap enough to do off-thread. If the model keeps moving, the last result
+     * is served <em>without</em> an ETag: it may straddle an edit, and nothing
+     * that may be wrong should become cacheable.
      */
     private static Router.Handler calc(FileResolver resolver, HostApplication host,
                     BiFunction<CalcContext, Request, Response> body)
@@ -197,7 +209,22 @@ public final class ApiRoutes
             if (ConditionalGet.isNotModified(request, etag))
                 return ConditionalGet.notModified(etag);
 
-            return body.apply(context, request).withHeader(ConditionalGet.ETAG, etag);
+            for (var attempt = 1;; attempt++)
+            {
+                var response = body.apply(context, request);
+
+                var after = resolveForCalc(resolver, host, request);
+                if (after.changeCount() == context.changeCount())
+                    return response.withHeader(ConditionalGet.ETAG,
+                                    ConditionalGet.etag(context.changeCount(), request));
+
+                if (attempt >= CALC_ATTEMPTS)
+                    return response;
+
+                // recompute against the state that superseded it, not the one
+                // whose snapshot the answer already contradicts
+                context = after;
+            }
         };
     }
 
