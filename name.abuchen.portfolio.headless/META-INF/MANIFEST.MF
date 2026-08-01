@@ -1,0 +1,14 @@
+Manifest-Version: 1.0
+Bundle-ManifestVersion: 2
+Bundle-Name: Portfolio Performance Headless Host
+Bundle-SymbolicName: name.abuchen.portfolio.headless;singleton:=true
+Bundle-Version: 0.85.1.qualifier
+Bundle-Vendor: Andreas Buchen
+Bundle-RequiredExecutionEnvironment: JavaSE-21
+Require-Bundle: name.abuchen.portfolio;bundle-version="0.85.1",
+ name.abuchen.portfolio.rest;bundle-version="0.85.1",
+ com.google.gson,
+ org.eclipse.core.runtime,
+ org.eclipse.equinox.app,
+ org.eclipse.equinox.preferences
+Automatic-Module-Name: name.abuchen.portfolio.headless

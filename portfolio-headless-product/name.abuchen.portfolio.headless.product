@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?pde version="3.5"?>
+
+<product name="Portfolio Performance Headless" uid="name.abuchen.portfolio.headless.product" id="name.abuchen.portfolio.headless.application" application="name.abuchen.portfolio.headless.application" version="0.85.1.qualifier" type="bundles" includeLaunchers="true" autoIncludeRequirements="true">
+
+   <configIni use="default">
+   </configIni>
+
+   <launcherArgs>
+      <programArgs>-consoleLog
+      </programArgs>
+      <vmArgs>-Dosgi.requiredJavaVersion=21 -Xms256m -Xmx2g --add-modules=ALL-SYSTEM
+      </vmArgs>
+   </launcherArgs>
+
+   <launcher name="PortfolioPerformanceHeadless">
+   </launcher>
+
+   <plugins>
+      <plugin id="name.abuchen.portfolio.headless"/>
+   </plugins>
+
+   <!--
+      Without these the framework starts nothing: every bundle lands at the default
+      start level with no auto-start, and the launcher fails with "Unable to acquire
+      application service". Only bundles the local-dev target platform actually
+      carries are listed - simpleconfigurator is not among them.
+   -->
+   <configurations>
+      <plugin id="org.eclipse.osgi" autoStart="true" startLevel="-1" />
+      <plugin id="org.eclipse.equinox.common" autoStart="true" startLevel="2" />
+      <plugin id="org.apache.felix.scr" autoStart="true" startLevel="2" />
+      <plugin id="org.eclipse.core.runtime" autoStart="true" startLevel="4" />
+   </configurations>
+
+</product>

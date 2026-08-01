@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+
+	<parent>
+		<groupId>name.abuchen.portfolio</groupId>
+		<artifactId>portfolio-app</artifactId>
+		<version>0.85.1-SNAPSHOT</version>
+		<relativePath>../portfolio-app</relativePath>
+	</parent>
+
+	<artifactId>portfolio.headless.product</artifactId>
+	<packaging>eclipse-repository</packaging>
+
+	<!--
+		A module of its own rather than a second product inside portfolio-product:
+		that module's eclipse-repository packaging resolves metadata for *every*
+		product it contains, and the distro product hard-requires the Babel
+		translation features. Sharing the module would drag those into a headless
+		build that has no UI at all - and would make this product unbuildable under
+		-Plocal-dev, which is the profile it is meant to be developed with.
+	-->
+
+	<properties>
+		<sonar.skip>true</sonar.skip>
+		<headless.os>macosx</headless.os>
+		<headless.ws>cocoa</headless.ws>
+		<headless.arch>aarch64</headless.arch>
+	</properties>
+
+	<build>
+		<plugins>
+			<plugin>
+				<groupId>org.eclipse.tycho</groupId>
+				<artifactId>target-platform-configuration</artifactId>
+				<configuration>
+					<!--
+						The daemon is built for the machine it runs on. The desktop
+						product cross-builds five environments because it ships
+						installers; this one is a local service, and materializing
+						five copies of it would only slow the build.
+					-->
+					<environments>
+						<environment>
+							<os>${headless.os}</os>
+							<ws>${headless.ws}</ws>
+							<arch>${headless.arch}</arch>
+						</environment>
+					</environments>
+				</configuration>
+			</plugin>
+			<plugin>
+				<artifactId>maven-enforcer-plugin</artifactId>
+				<executions>
+					<execution>
+						<id>enforce-versions</id>
+						<phase>none</phase>
+					</execution>
+				</executions>
+			</plugin>
+			<plugin>
+				<groupId>org.eclipse.tycho</groupId>
+				<artifactId>tycho-p2-director-plugin</artifactId>
+				<version>${tycho-version}</version>
+				<executions>
+					<execution>
+						<id>materialize-products</id>
+						<goals>
+							<goal>materialize-products</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
+		</plugins>
+	</build>
+</project>
