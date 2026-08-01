@@ -16,7 +16,7 @@ import java.util.TreeMap;
  * route is unreachable without a valid token, so it only ever sees VALID.
  */
 public record Request(String method, String path, Map<String, String> pathParams, Map<String, String> queryParams,
-                byte[] body, Authorization authorization, String userAgent)
+                Map<String, String> headers, byte[] body, Authorization authorization, String userAgent)
 {
     /** the preference page says which: "you forgot the header" and "your token is wrong" differ */
     public enum Authorization
@@ -27,7 +27,7 @@ public record Request(String method, String path, Map<String, String> pathParams
     public Request(String method, String path, Map<String, String> pathParams, Map<String, String> queryParams,
                     byte[] body)
     {
-        this(method, path, pathParams, queryParams, body, Authorization.VALID, null);
+        this(method, path, pathParams, queryParams, Map.of(), body, Authorization.VALID, null);
     }
 
     public Request(String method, String path, Map<String, String> pathParams, byte[] body)
@@ -49,6 +49,21 @@ public record Request(String method, String path, Map<String, String> pathParams
     public String queryParam(String name)
     {
         return queryParams.get(name);
+    }
+
+    /**
+     * The request header, or null if absent. Header names are case-insensitive
+     * by RFC 9110, and the callers here spell them the way the specification
+     * does, so the lookup - not the map - normalizes.
+     */
+    public String header(String name)
+    {
+        for (var entry : headers.entrySet())
+        {
+            if (entry.getKey().equalsIgnoreCase(name))
+                return entry.getValue();
+        }
+        return null;
     }
 
     /**
