@@ -18,6 +18,17 @@
 
    <plugins>
       <plugin id="name.abuchen.portfolio.headless"/>
+
+      <!--
+         XStream's default parser. Nothing declares it as a requirement - the
+         servicemix XStream bundle imports org.xmlpull.v1 optionally - so
+         autoIncludeRequirements does not pull it in, and without it every XML
+         format (plain, compressed and encrypted) fails to load *and* to save with
+         NoClassDefFoundError: org/xmlpull/v1/XmlPullParserException. Phase 1 never
+         noticed because the file it was verified against is the protobuf format and
+         it never saved anything. The desktop feature lists it for the same reason.
+      -->
+      <plugin id="org.apache.servicemix.bundles.xpp3"/>
    </plugins>
 
    <!--
