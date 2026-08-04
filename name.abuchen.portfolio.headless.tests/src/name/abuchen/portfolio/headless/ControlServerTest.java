@@ -10,6 +10,7 @@ import java.net.HttpURLConnection;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -75,6 +76,59 @@ public class ControlServerTest
         }
     }
 
+    /**
+     * A quote refresher that never runs: the routes' contract - what a trigger
+     * answers, how a failure is reported - is what these tests pin down, not the
+     * refresher itself, which needs the network.
+     */
+    private static final class FixedQuotes implements ControlServer.QuoteControl
+    {
+        private final Instant lastUpdate;
+        private final List<Failure> failures;
+        private boolean requested;
+
+        FixedQuotes(Instant lastUpdate, List<Failure> failures)
+        {
+            this.lastUpdate = lastUpdate;
+            this.failures = failures;
+        }
+
+        static FixedQuotes never()
+        {
+            return new FixedQuotes(null, List.of());
+        }
+
+        @Override
+        public Optional<Instant> getLastUpdate()
+        {
+            return Optional.ofNullable(lastUpdate);
+        }
+
+        @Override
+        public Optional<String> getLastError()
+        {
+            return Optional.empty();
+        }
+
+        @Override
+        public boolean isRunning()
+        {
+            return requested;
+        }
+
+        @Override
+        public void requestRefresh()
+        {
+            requested = true;
+        }
+
+        @Override
+        public List<Failure> getLastFailures()
+        {
+            return failures;
+        }
+    }
+
     private FileSet emptySet()
     {
         var node = InstanceScope.INSTANCE.getNode("headless-control-" + UUID.randomUUID());
@@ -95,7 +149,12 @@ public class ControlServerTest
 
     private ControlServer server(FileSet files, ControlServer.Refresh rates)
     {
-        return new ControlServer(0, 5712, files, rates, FixedRefresh.never(), TOKEN::equals);
+        return server(files, rates, FixedQuotes.never());
+    }
+
+    private ControlServer server(FileSet files, ControlServer.Refresh rates, ControlServer.QuoteControl quotes)
+    {
+        return new ControlServer(0, 5712, files, rates, quotes, TOKEN::equals);
     }
 
     @Test
@@ -331,6 +390,73 @@ public class ControlServerTest
             server.stop();
             host.shutdown();
             files.releaseLocks();
+        }
+    }
+
+    /**
+     * The quote routes are user data (instrument names) and an ability to make the
+     * daemon reach the network, so they take the token like the file routes do.
+     */
+    @Test
+    public void testTheQuoteRoutesRefuseWithoutTheToken() throws IOException
+    {
+        var server = server(emptySet(), FixedRefresh.succeeded());
+        server.start();
+
+        try
+        {
+            var port = server.boundPort();
+
+            assertThat(request(port, "GET", "/quotes", null, null).status(), is(401));
+            assertThat(request(port, "POST", "/quotes/refresh", null, "wrong").status(), is(401));
+        }
+        finally
+        {
+            server.stop();
+        }
+    }
+
+    /**
+     * The refresh trigger answers 202 and returns immediately - the control server
+     * has one thread, and a cycle can take a minute, so the caller polls GET /quotes
+     * rather than holding a request open (which would block /health behind it).
+     */
+    @Test
+    public void testARefreshCanBeQueuedAndItsOutcomeRead() throws IOException
+    {
+        var quotes = new FixedQuotes(Instant.parse("2026-08-04T09:00:00Z"), List.of(
+                        new ControlServer.QuoteControl.Failure("uuid-1", "ACME Corp", "no quotes returned")));
+
+        var server = server(emptySet(), FixedRefresh.succeeded(), quotes);
+        server.start();
+
+        try
+        {
+            var port = server.boundPort();
+
+            var status = request(port, "GET", "/quotes", null, TOKEN);
+            assertThat(status.status(), is(200));
+
+            var body = json(status.body());
+            assertThat(body.get("lastUpdate").getAsString(), is("2026-08-04T09:00:00Z"));
+            assertThat(body.get("running").getAsBoolean(), is(false));
+
+            var failure = body.getAsJsonArray("failures").get(0).getAsJsonObject();
+            assertThat(failure.get("uuid").getAsString(), is("uuid-1"));
+            assertThat(failure.get("name").getAsString(), is("ACME Corp"));
+            assertThat(failure.get("reason").getAsString(), is("no quotes returned"));
+
+            var triggered = request(port, "POST", "/quotes/refresh", null, TOKEN);
+            assertThat(triggered.status(), is(202));
+            assertThat(quotes.requested, is(true));
+            assertThat(json(triggered.body()).get("running").getAsBoolean(), is(true));
+
+            assertThat(request(port, "GET", "/quotes/refresh", null, TOKEN).status(), is(405));
+            assertThat(request(port, "POST", "/quotes", null, TOKEN).status(), is(405));
+        }
+        finally
+        {
+            server.stop();
         }
     }
 

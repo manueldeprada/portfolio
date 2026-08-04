@@ -9,6 +9,7 @@ import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.Executors;
 import java.util.function.Predicate;
@@ -55,6 +56,8 @@ import name.abuchen.portfolio.PortfolioLog;
  *                                   password-required, with a wrong one 403
  *                                   password-rejected
  * DELETE /files/{id}[?save=false]   token; save, release and forget one
+ * GET    /quotes                    token; the last refresh cycle: when, what failed
+ * POST   /quotes/refresh            token; queue a refresh cycle now, answered 202
  * </pre>
  *
  * The bodies are small on purpose - a path, a base currency, the id of a file to copy
@@ -75,11 +78,32 @@ public class ControlServer
         Optional<String> getLastError();
     }
 
+    /**
+     * What the quote refresher exposes beyond {@link Refresh}: a way to ask for a
+     * cycle now, and what happened to each instrument in the last one. The exchange
+     * rates need neither - their cadence is the ECB's publishing schedule, not a
+     * user's button.
+     */
+    public interface QuoteControl extends Refresh
+    {
+        /** One instrument that could not be updated in the last completed cycle. */
+        record Failure(String securityUuid, String securityName, String reason)
+        {
+        }
+
+        boolean isRunning();
+
+        /** Queues a refresh cycle unless one is already queued; returns immediately. */
+        void requestRefresh();
+
+        List<Failure> getLastFailures();
+    }
+
     private final int port;
     private final int apiPort;
     private final FileSet files;
     private final Refresh exchangeRates;
-    private final Refresh quotes;
+    private final QuoteControl quotes;
 
     /** The REST API's own authenticator, so there is one set of tokens rather than two. */
     private final Predicate<String> authenticator;
@@ -88,7 +112,7 @@ public class ControlServer
 
     private HttpServer server;
 
-    public ControlServer(int port, int apiPort, FileSet files, Refresh exchangeRates, Refresh quotes,
+    public ControlServer(int port, int apiPort, FileSet files, Refresh exchangeRates, QuoteControl quotes,
                     Predicate<String> authenticator)
     {
         this.port = port;
@@ -146,7 +170,10 @@ public class ControlServer
                 return;
             }
 
-            if (!"/files".equals(path) && !path.startsWith("/files/"))
+            var isFiles = "/files".equals(path) || path.startsWith("/files/");
+            var isQuotes = "/quotes".equals(path) || "/quotes/refresh".equals(path);
+
+            if (!isFiles && !isQuotes)
             {
                 exchange.sendResponseHeaders(404, -1);
                 return;
@@ -158,6 +185,30 @@ public class ControlServer
                 // send rather than left to guess at the shape of the failure.
                 exchange.getResponseHeaders().set("WWW-Authenticate", "Bearer");
                 send(exchange, 401, error("unauthorized", "a bearer token is required"));
+                return;
+            }
+
+            if ("/quotes".equals(path))
+            {
+                if ("GET".equals(method))
+                    send(exchange, 200, quoteStatus());
+                else
+                    exchange.sendResponseHeaders(405, -1);
+                return;
+            }
+
+            if ("/quotes/refresh".equals(path))
+            {
+                if ("POST".equals(method))
+                {
+                    // Queued rather than run inline: this server has one thread, and a
+                    // cycle can take a minute - waiting here would block /health with
+                    // it. The caller polls GET /quotes until running turns false.
+                    quotes.requestRefresh();
+                    send(exchange, 202, quoteStatus());
+                }
+                else
+                    exchange.sendResponseHeaders(405, -1);
                 return;
             }
 
@@ -409,6 +460,25 @@ public class ControlServer
             array.add(entry);
         }
         json.add("files", array);
+
+        return json;
+    }
+
+    /* testing */ JsonObject quoteStatus()
+    {
+        var json = refresher(quotes.getLastUpdate(), quotes.getLastError());
+        json.addProperty("running", quotes.isRunning());
+
+        var failures = new JsonArray();
+        for (var failure : quotes.getLastFailures())
+        {
+            var entry = new JsonObject();
+            entry.addProperty("uuid", failure.securityUuid());
+            entry.addProperty("name", failure.securityName());
+            entry.addProperty("reason", failure.reason());
+            failures.add(entry);
+        }
+        json.add("failures", failures);
 
         return json;
     }

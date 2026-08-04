@@ -159,6 +159,15 @@ the same rate-limit backoff, and the same permanent-error marking. Two differenc
 A cycle that downloads the same prices again does not mark the file dirty, or an
 untouched file would be rewritten every hour for ever.
 
+A cycle can also be asked for: `POST /quotes/refresh` on the control port queues one
+and answers 202 immediately (the control server has one thread, and holding the
+request open for a minute would block `/health` behind it); the caller polls
+`GET /quotes` until `running` turns false. That status also reports, per instrument,
+what could not be updated in the last completed cycle - the feed needing a signed-in
+account, a rate limit, a feed that answered errors and no prices - so a client can
+show *which* prices are stale rather than a single error string. `/health` keeps only
+the one-line summary.
+
 ## Saving
 
 The desktop's rule is "only the user saves", which it can afford because there is a
@@ -189,6 +198,8 @@ GET    /health                    no token; liveness, plus what is degraded
 GET    /files                     token; what is open, with each file's id
 POST   /files                     token; open, create or copy one
 DELETE /files/{id}[?save=false]   token; save, release and forget one
+GET    /quotes                    token; the last refresh cycle: when, what failed
+POST   /quotes/refresh            token; queue a refresh cycle now, answered 202
 ```
 
 An encrypted file takes a `password` in the body, and the two answers a caller acts

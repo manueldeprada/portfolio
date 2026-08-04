@@ -3,13 +3,18 @@ package name.abuchen.portfolio.headless;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 import name.abuchen.portfolio.PortfolioLog;
@@ -42,7 +47,7 @@ import name.abuchen.portfolio.online.RateLimitExceededException;
  * rather than once per instrument.</li>
  * </ul>
  */
-public class QuoteRefresher implements ControlServer.Refresh
+public class QuoteRefresher implements ControlServer.QuoteControl
 {
     /**
      * One instrument's update against one feed. Split by what it fetches, matching
@@ -87,7 +92,15 @@ public class QuoteRefresher implements ControlServer.Refresh
         {
             var data = feed.getHistoricalQuotes(security, false);
             if (!data.getErrors().isEmpty())
+            {
+                // A response carrying errors and no prices at all is a failed update,
+                // not an empty one - thrown rather than logged, which is what puts the
+                // instrument on the cycle's failure list.
+                if (data.getPrices().isEmpty())
+                    throw data.getErrors().get(0);
+
                 PortfolioLog.abbreviated(data.getErrors());
+            }
 
             var policy = feed.getHistoricalUpdatePolicy(security);
             var identity = policy == HistoricalUpdatePolicy.REPLACE_IF_SOURCE_CHANGED
@@ -169,6 +182,11 @@ public class QuoteRefresher implements ControlServer.Refresh
 
     private volatile Instant lastUpdate;
     private volatile String lastError;
+    private volatile boolean running;
+    private volatile List<Failure> lastFailures = List.of();
+
+    /** True while a user-requested cycle waits for the scheduler thread. */
+    private final AtomicBoolean requested = new AtomicBoolean();
 
     public QuoteRefresher(HeadlessHost host, FileSet files)
     {
@@ -217,12 +235,53 @@ public class QuoteRefresher implements ControlServer.Refresh
         return Optional.ofNullable(lastError);
     }
 
+    @Override
+    public boolean isRunning()
+    {
+        return requested.get() || running;
+    }
+
+    @Override
+    public List<Failure> getLastFailures()
+    {
+        return lastFailures;
+    }
+
+    /**
+     * Queues one cycle on the scheduler thread, which is what serializes it against
+     * the scheduled ones. One queued cycle at a time: a second request while one
+     * waits would only run the same cycle twice. A request during a *running* cycle
+     * does queue - that cycle started before the request and cannot answer it.
+     */
+    @Override
+    public void requestRefresh()
+    {
+        if (!requested.compareAndSet(false, true))
+            return;
+
+        try
+        {
+            scheduler.execute(() -> {
+                requested.set(false);
+                refresh();
+            });
+        }
+        catch (RejectedExecutionException e)
+        {
+            // Shutting down; the request has no cycle to run in.
+            requested.set(false);
+        }
+    }
+
     private void refresh()
     {
+        running = true;
+        var failures = new ConcurrentLinkedQueue<Failure>();
+
         try
         {
             for (var file : files.list())
-                refresh(file);
+                refresh(file, failures);
 
             lastUpdate = Instant.now();
         }
@@ -231,9 +290,19 @@ public class QuoteRefresher implements ControlServer.Refresh
             lastError = e.getMessage();
             PortfolioLog.error(e);
         }
+        finally
+        {
+            // One entry per instrument even when both its fetches failed: the reader
+            // asks "which of my instruments are stale", not "which fetch broke".
+            var byUuid = new LinkedHashMap<String, Failure>();
+            for (var failure : failures)
+                byUuid.putIfAbsent(failure.securityUuid(), failure);
+            lastFailures = List.copyOf(byUuid.values());
+            running = false;
+        }
     }
 
-    private void refresh(HeadlessHost.LoadedFile file) throws Exception
+    private void refresh(HeadlessHost.LoadedFile file, Collection<Failure> failures) throws Exception
     {
         // Snapshot the securities on the model thread; the list itself is mutable and
         // an API write could be adding to it right now.
@@ -265,7 +334,8 @@ public class QuoteRefresher implements ControlServer.Refresh
 
         var groups = tasks.stream().collect(Collectors.groupingBy(QuoteRefresher::criterionOf));
 
-        var futures = groups.values().stream().map(group -> fetchers.submit(() -> runGroup(group))).toList();
+        var futures = groups.values().stream().map(group -> fetchers.submit(() -> runGroup(group, failures)))
+                        .toList();
         var modified = false;
         for (var future : futures)
             modified |= future.get().booleanValue();
@@ -296,7 +366,7 @@ public class QuoteRefresher implements ControlServer.Refresh
      * authentication abandons the rest of the group because every one of them would
      * fail the same way.
      */
-    private Boolean runGroup(List<Task> group)
+    private Boolean runGroup(List<Task> group, Collection<Failure> failures)
     {
         var pending = new ArrayList<>(group);
         var attemptsLeft = group.get(0).feed.getMaxRateLimitAttempts();
@@ -316,6 +386,9 @@ public class QuoteRefresher implements ControlServer.Refresh
             catch (AuthenticationExpiredException e)
             {
                 lastError = "authentication expired for " + task.feed.getName();
+                var reason = "needs a signed-in " + task.feed.getName() + " account";
+                failures.add(failureOf(task, reason));
+                pending.forEach(remaining -> failures.add(failureOf(remaining, reason)));
                 PortfolioLog.warning("Skipping " + (pending.size() + 1) + " price update(s) from " + task.feed.getName()
                                 + ": it needs a signed-in account, which a headless daemon cannot provide.");
                 return Boolean.valueOf(modified);
@@ -323,6 +396,8 @@ public class QuoteRefresher implements ControlServer.Refresh
             catch (FeedConfigurationException e)
             {
                 task.security.getEphemeralData().setHasPermanentError();
+                failures.add(failureOf(task,
+                                e.getMessage() != null ? e.getMessage() : "feed configuration issue"));
                 PortfolioLog.warning("Instrument \"" + task.security.getName() + "\" has a feed configuration issue: "
                                 + e.getMessage());
             }
@@ -332,6 +407,9 @@ public class QuoteRefresher implements ControlServer.Refresh
                 if (attemptsLeft < 0 || !e.getRetryAfter().isPositive())
                 {
                     lastError = "rate limit exceeded for " + task.feed.getName();
+                    var reason = "rate limit exceeded for " + task.feed.getName() + ", skipped this cycle";
+                    failures.add(failureOf(task, reason));
+                    pending.forEach(remaining -> failures.add(failureOf(remaining, reason)));
                     PortfolioLog.warning("Rate limit exceeded for " + task.feed.getName() + "; skipping "
                                     + (pending.size() + 1) + " price update(s) this cycle.");
                     return Boolean.valueOf(modified);
@@ -356,10 +434,17 @@ public class QuoteRefresher implements ControlServer.Refresh
             catch (Exception e) // NOSONAR - one bad instrument must not stop the group
             {
                 lastError = e.getMessage();
+                failures.add(failureOf(task,
+                                e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));
                 PortfolioLog.abbreviated(e);
             }
         }
 
         return Boolean.valueOf(modified);
+    }
+
+    private static Failure failureOf(Task task, String reason)
+    {
+        return new Failure(task.security.getUUID(), task.security.getName(), reason);
     }
 }
