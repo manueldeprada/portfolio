@@ -1,13 +1,19 @@
 package name.abuchen.portfolio.model;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
+import static org.junit.Assume.assumeTrue;
 
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.attribute.PosixFileAttributeView;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.EnumSet;
 
 import org.eclipse.core.runtime.NullProgressMonitor;
@@ -221,6 +227,121 @@ public class ClientFactoryTest
         client.addSecurity(security);
 
         return client;
+    }
+
+    /**
+     * A save that cannot complete must leave the file it was asked to write exactly
+     * as it was. It used to write into that file directly, so the previous contents
+     * were gone the moment the stream opened and anything failing afterwards - a full
+     * disk, an unserializable model - left a truncated file. The bytes now go to a
+     * sibling that is renamed into place, and this pins where they go: with the
+     * sibling's name occupied by a directory, the save fails and the file is untouched.
+     */
+    @Test
+    public void testAFailedSaveLeavesTheExistingFileIntact() throws IOException
+    {
+        var file = tempFolder.newFile("portfolio.xml");
+        ClientFactory.save(clientWith("Before"), file);
+
+        var saved = Files.readAllBytes(file.toPath());
+        assertTrue(saved.length > 0);
+
+        assertTrue(new File(tempFolder.getRoot(), "portfolio.xml.part").mkdir());
+
+        try
+        {
+            ClientFactory.save(clientWith("After"), file);
+            fail("expected the save to fail with its temporary file's name taken");
+        }
+        catch (IOException e)
+        {
+            assertArrayEquals(saved, Files.readAllBytes(file.toPath()));
+        }
+    }
+
+    /** A successful save leaves no half-written sibling behind. */
+    @Test
+    public void testASuccessfulSaveCleansUpAfterItself() throws IOException
+    {
+        var file = tempFolder.newFile("portfolio.xml");
+
+        ClientFactory.save(clientWith("Whatever"), file);
+
+        assertTrue(file.length() > 0);
+        assertFalse(new File(tempFolder.getRoot(), "portfolio.xml.part").exists());
+    }
+
+    @Test
+    public void testASaveKeepsThePermissionsOfTheFileItReplaces() throws IOException
+    {
+        var file = tempFolder.newFile("portfolio.xml");
+        var path = file.toPath();
+
+        assumeTrue(Files.getFileAttributeView(path, PosixFileAttributeView.class) != null);
+
+        // a file the user restricted to themselves must not be widened by a save,
+        // which a rename would do: the temporary file was created with the default mask
+        var restricted = PosixFilePermissions.fromString("rw-------");
+        Files.setPosixFilePermissions(path, restricted);
+
+        ClientFactory.save(clientWith("Whatever"), file);
+
+        assertEquals(restricted, Files.getPosixFilePermissions(path));
+    }
+
+    /**
+     * Replacing a file is governed by its directory's permissions, not its own, so a
+     * rename would overwrite a file the user marked read-only - which writing into it
+     * never did.
+     */
+    @Test
+    public void testAReadOnlyFileIsStillRefused() throws IOException
+    {
+        var file = tempFolder.newFile("portfolio.xml");
+        ClientFactory.save(clientWith("Before"), file);
+
+        var saved = Files.readAllBytes(file.toPath());
+        assumeTrue(file.setWritable(false));
+
+        try
+        {
+            ClientFactory.save(clientWith("After"), file);
+            fail("expected a read-only file to be refused");
+        }
+        catch (IOException e)
+        {
+            assertArrayEquals(saved, Files.readAllBytes(file.toPath()));
+        }
+        finally
+        {
+            file.setWritable(true);
+        }
+    }
+
+    /**
+     * Writing through a symlink rather than replacing it: the rename would otherwise
+     * turn the link into a regular file and leave what it pointed at untouched.
+     */
+    @Test
+    public void testASaveFollowsASymlinkInsteadOfReplacingIt() throws IOException
+    {
+        var real = tempFolder.newFile("real.xml");
+        var link = new File(tempFolder.getRoot(), "link.xml");
+
+        try
+        {
+            Files.createSymbolicLink(link.toPath(), real.toPath());
+        }
+        catch (IOException | UnsupportedOperationException e)
+        {
+            assumeTrue("symbolic links are not available here", false);
+            return;
+        }
+
+        ClientFactory.save(clientWith("Whatever"), link);
+
+        assertTrue(Files.isSymbolicLink(link.toPath()));
+        assertTrue(Files.readAllBytes(real.toPath()).length > 0);
     }
 
     /**

@@ -22,6 +22,11 @@ import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.PosixFileAttributeView;
 import java.security.AlgorithmParameters;
 import java.security.GeneralSecurityException;
 import java.security.NoSuchAlgorithmException;
@@ -711,11 +716,80 @@ public class ClientFactory
         writeFile(client, file, password, flags, false);
     }
 
+    /**
+     * Writes the client to a temporary sibling and moves it into place.
+     * <p>
+     * Writing into the file directly meant that anything going wrong part-way
+     * through - a full disk, a read-only volume, an error while serializing -
+     * left the file truncated, and the previous contents were already gone the
+     * moment the stream opened. The rename is the last step and either happens
+     * or does not, so a failed save leaves the file exactly as it was.
+     * <p>
+     * A sibling rather than the temp directory, because a move within one
+     * directory is a rename, which is atomic; across filesystems it would be a
+     * copy, and the window this exists to close would be back.
+     */
     private static void writeFile(final Client client, final File file, char[] password, Set<SaveFlag> flags,
                     boolean updateFlags) throws IOException
     {
         PortfolioLog.info(String.format("Saving %s with %s", file.getName(), flags.toString())); //$NON-NLS-1$
 
+        // resolved, so that a symlinked portfolio file is replaced where it
+        // points rather than being turned into a regular file by the rename
+        File target = canonical(file);
+
+        // a rename is governed by the directory's permissions, not the file's, so
+        // it would happily replace a file the user marked read-only - which writing
+        // into it never did
+        if (target.exists() && !target.canWrite())
+            throw new IOException(target.getAbsolutePath() + " (Permission denied)"); //$NON-NLS-1$
+
+        File temp = new File(target.getAbsoluteFile().getParentFile(), target.getName() + ".part"); //$NON-NLS-1$
+
+        // a directory that may not be written cannot hold the temporary file, and
+        // there a save can only be what it always was: a write into the file
+        // itself. Rare (a share that allows editing files but not creating them),
+        // and the alternative is refusing to save at all.
+        if (!canCreateSibling(temp))
+        {
+            PortfolioLog.warning(MessageFormat.format(
+                            "Cannot create {0}, so {1} is written in place: an interrupted save will truncate it.", //$NON-NLS-1$
+                            temp.getName(), target.getAbsolutePath()));
+            writeInto(client, target, password, flags, updateFlags);
+            return;
+        }
+
+        try
+        {
+            writeInto(client, temp, password, flags, false);
+
+            // the file being replaced keeps its permissions - the temporary one was
+            // created with the default mask, and a save must not widen or narrow
+            // access to a file the user set up
+            copyPermissions(target, temp);
+
+            move(temp, target);
+
+            // only now: a client whose flags say BINARY while the file on disk is
+            // still the previous XML would be saved as neither next time
+            if (updateFlags)
+            {
+                client.getSaveFlags().clear();
+                client.getSaveFlags().addAll(flags);
+            }
+        }
+        finally
+        {
+            // nothing reads a leftover .part file, and leaving one beside every
+            // failed save is litter in the user's own directory
+            Files.deleteIfExists(temp.toPath());
+        }
+    }
+
+    /** The write itself, into whichever file the caller decided is the right one. */
+    private static void writeInto(final Client client, final File file, char[] password, Set<SaveFlag> flags,
+                    boolean updateFlags) throws IOException
+    {
         // open an output stream for the file using a 64 KB buffer to speed up
         // writing
         try (FileOutputStream stream = new FileOutputStream(file);
@@ -739,7 +813,7 @@ public class ClientFactory
                 // also on some other platforms (for example reported for Linux
                 // Mint, locks are not supported on SMB shares)
 
-                PortfolioLog.warning(MessageFormat.format("Failed to acquire lock {0} with message {1}", //$NON-NLS-1$
+                PortfolioLog.warning(MessageFormat.format("Failed to acquire lock {0} with message {1}",
                                 file.getAbsolutePath(), e.getMessage()));
             }
 
@@ -756,6 +830,90 @@ public class ClientFactory
                 client.getSaveFlags().clear();
                 client.getSaveFlags().addAll(flags);
             }
+        }
+
+        sync(file);
+    }
+
+    /**
+     * Flushes the file to the storage device. Without it, a crash shortly after the
+     * rename can leave the new name pointing at blocks that were never written - a
+     * file that exists and cannot be read.
+     * <p>
+     * On its own channel, because a persister may close the stream it was handed (the
+     * compressing one does), and forcing a closed channel throws.
+     */
+    private static void sync(File file)
+    {
+        try (FileChannel channel = FileChannel.open(file.toPath(), StandardOpenOption.WRITE))
+        {
+            channel.force(true);
+        }
+        catch (IOException e)
+        {
+            // the bytes are with the operating system either way; this is the
+            // difference between "written" and "certainly written", and not worth
+            // failing a save that otherwise succeeded
+            PortfolioLog.warning(MessageFormat.format("Could not flush {0} to disk: {1}",
+                            file.getAbsolutePath(), e.getMessage()));
+        }
+    }
+
+    /**
+     * Whether the temporary file can be created at all. Its directory has to be
+     * writable, which is not the same as the file being writable.
+     */
+    private static boolean canCreateSibling(File temp)
+    {
+        var directory = temp.getAbsoluteFile().getParentFile();
+        return directory != null && directory.canWrite();
+    }
+
+    private static File canonical(File file)
+    {
+        try
+        {
+            return file.getCanonicalFile();
+        }
+        catch (IOException e)
+        {
+            return file.getAbsoluteFile();
+        }
+    }
+
+    private static void move(File temp, File target) throws IOException
+    {
+        try
+        {
+            Files.move(temp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING,
+                            StandardCopyOption.ATOMIC_MOVE);
+        }
+        catch (AtomicMoveNotSupportedException e)
+        {
+            // some network filesystems cannot promise it. The replacement is then
+            // not atomic, but it is still a rename of a fully written file rather
+            // than a partial write into the real one.
+            Files.move(temp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING);
+        }
+    }
+
+    private static void copyPermissions(File from, File to)
+    {
+        if (!from.exists())
+            return;
+
+        try
+        {
+            var view = Files.getFileAttributeView(from.toPath(), PosixFileAttributeView.class);
+            if (view != null)
+                Files.setPosixFilePermissions(to.toPath(), view.readAttributes().permissions());
+        }
+        catch (IOException | UnsupportedOperationException e)
+        {
+            // Windows, or a filesystem without POSIX permissions: the file is
+            // written either way, and this is not worth failing a save over
+            PortfolioLog.warning(MessageFormat.format("Could not carry the permissions of {0} over to {1}: {2}", //$NON-NLS-1$
+                            from.getAbsolutePath(), to.getName(), e.getMessage()));
         }
     }
 
