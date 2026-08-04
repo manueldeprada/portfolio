@@ -61,6 +61,60 @@ public class PatchSecurityTest
         assertThat(security.getIsin(), nullValue());
     }
 
+    /**
+     * The switch a headless deployment actually needs: the built-in feed wants a
+     * signed-in account a daemon cannot provide, so an instrument is moved to
+     * Yahoo. The response carries the new feed, and clearing {@code latestFeed}
+     * makes the historical feed serve the intraday quote too.
+     */
+    @Test
+    public void testTheQuoteFeedCanBeSwitched()
+    {
+        var client = new Client();
+        var security = new SecurityBuilder().addTo(client);
+        security.setFeed("PP");
+        security.setLatestFeed("PP");
+
+        var result = SecuritiesHandler.patch(client, security.getUUID(),
+                        json("{\"feed\":\"YAHOO\",\"latestFeed\":null}"));
+
+        assertThat(security.getFeed(), is("YAHOO"));
+        assertThat(security.getLatestFeed(), is(nullValue()));
+        assertThat(result.entity().getAsJsonObject().get("feed").getAsString(), is("YAHOO"));
+        assertThat(result.entity().getAsJsonObject().get("latestFeed"), is(nullValue()));
+    }
+
+    @Test
+    public void testAnUnknownQuoteFeedIsRejectedAndFeedCannotBeCleared()
+    {
+        var client = new Client();
+        var security = new SecurityBuilder().addTo(client);
+        security.setFeed("MANUAL");
+
+        try
+        {
+            SecuritiesHandler.patch(client, security.getUUID(), json("{\"feed\":\"NO-SUCH-FEED\"}"));
+            Assert.fail("expected ApiException");
+        }
+        catch (ApiException e)
+        {
+            assertThat(e.getStatus(), is(422));
+            assertThat(e.getErrors().get(0).code(), is("invalid-value"));
+            assertThat(security.getFeed(), is("MANUAL"));
+        }
+
+        try
+        {
+            SecuritiesHandler.patch(client, security.getUUID(), json("{\"feed\":null}"));
+            Assert.fail("expected ApiException");
+        }
+        catch (ApiException e)
+        {
+            assertThat(e.getErrors().get(0).code(), is("required"));
+            assertThat(security.getFeed(), is("MANUAL"));
+        }
+    }
+
     @Test
     public void testEmptyPatchDoesNotMarkFileDirty()
     {

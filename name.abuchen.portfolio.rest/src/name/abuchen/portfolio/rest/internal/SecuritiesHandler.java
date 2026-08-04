@@ -14,6 +14,7 @@ import name.abuchen.portfolio.model.AttributeType;
 import name.abuchen.portfolio.model.Client;
 import name.abuchen.portfolio.model.Security;
 import name.abuchen.portfolio.money.CurrencyUnit;
+import name.abuchen.portfolio.online.Factory;
 
 public final class SecuritiesHandler
 {
@@ -71,7 +72,12 @@ public final class SecuritiesHandler
                                     (security, value) -> security.setNote(stringOrNull(value)), Security::getNote), //
                     "currencyCode", new WritableField(SecuritiesHandler::allowCurrencyOrNull, // //$NON-NLS-1$
                                     (security, value) -> security.setCurrencyCode(stringOrNull(value)),
-                                    Security::getCurrencyCode));
+                                    Security::getCurrencyCode), //
+                    "feed", new WritableField(SecuritiesHandler::requireFeedId, //$NON-NLS-1$
+                                    (security, value) -> security.setFeed(value.getAsString()), Security::getFeed), //
+                    "latestFeed", new WritableField(SecuritiesHandler::allowFeedIdOrNull, //$NON-NLS-1$
+                                    (security, value) -> security.setLatestFeed(stringOrNull(value)),
+                                    Security::getLatestFeed));
 
     private SecuritiesHandler()
     {
@@ -275,6 +281,39 @@ public final class SecuritiesHandler
         if (!value.isJsonNull() && !isString(value))
             return new ApiException.FieldError(field, "invalid-type", field + " must be a string or null"); //$NON-NLS-1$ //$NON-NLS-2$
         return null;
+    }
+
+    /**
+     * The quote feed must be one this build actually has - an unknown id would
+     * sit in the file silently downloading nothing. The ids are the stable feed
+     * identifiers ({@code YAHOO}, {@code MANUAL}, ...), the same strings the
+     * file format stores; {@code MANUAL} is the desktop's "no automatic
+     * updates" choice and is a feed like any other. Whether a feed can serve
+     * the instrument (Yahoo needs a ticker symbol, say) is not validated here:
+     * the requirements are feed-specific, and a feed that cannot deliver
+     * reports the instrument on the refresh failure list rather than failing
+     * silently.
+     */
+    private static ApiException.FieldError requireFeedId(Client client, Security security, String field,
+                    JsonElement value)
+    {
+        if (value.isJsonNull() || !isString(value))
+            return new ApiException.FieldError(field, "required", field + " must name a quote feed"); //$NON-NLS-1$ //$NON-NLS-2$
+
+        if (Factory.getQuoteFeedProvider(value.getAsString()) == null)
+            return new ApiException.FieldError(field, "invalid-value", //$NON-NLS-1$
+                            "unknown quote feed: " + value.getAsString()); //$NON-NLS-1$
+
+        return null;
+    }
+
+    /** null clears the latest-quote feed, falling back to the historical one. */
+    private static ApiException.FieldError allowFeedIdOrNull(Client client, Security security, String field,
+                    JsonElement value)
+    {
+        if (value.isJsonNull())
+            return null;
+        return requireFeedId(client, security, field, value);
     }
 
     /**

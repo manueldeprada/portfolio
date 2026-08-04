@@ -92,6 +92,14 @@ public final class EntityJson
         json.addProperty("uuid", security.getUUID()); //$NON-NLS-1$
         json.addProperty("name", security.getName()); //$NON-NLS-1$
         json.addProperty("currencyCode", security.getCurrencyCode()); //$NON-NLS-1$
+
+        // the quote feed ids, PATCHable; deliberately here and not in
+        // addSecurityDetails, so a holdings row does not carry feed plumbing
+        if (security.getFeed() != null)
+            json.addProperty("feed", security.getFeed()); //$NON-NLS-1$
+        if (security.getLatestFeed() != null)
+            json.addProperty("latestFeed", security.getLatestFeed()); //$NON-NLS-1$
+
         addSecurityDetails(json, client, security);
         return json;
     }

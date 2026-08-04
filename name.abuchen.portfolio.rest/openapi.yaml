@@ -2735,6 +2735,17 @@ components:
         tickerSymbol:
           type: string
           description: Omitted when not set.
+        feed:
+          type: string
+          description: |
+            The id of the quote feed the instrument's historical prices come
+            from (`YAHOO`, `MANUAL`, …) — the same identifier the file format
+            stores. Omitted when none is configured.
+        latestFeed:
+          type: string
+          description: |
+            The id of the feed the latest (intraday) quote comes from, when it
+            differs from `feed`. Omitted when the historical feed serves both.
         note:
           type: string
           description: Omitted when not set.
@@ -2759,14 +2770,29 @@ components:
         A JSON Merge Patch (RFC 7386) over an instrument. Every field is optional;
         an omitted field is left untouched. Fields typed `["string","null"]` accept
         an explicit `null` to clear them. Custom attributes are patched through the
-        nested `attributes` object. Everything else — prices, quote feeds, events,
-        the retired flag — is read-only in v1.
+        nested `attributes` object. Everything else — prices, feed-specific
+        configuration, events, the retired flag — is read-only in v1.
       additionalProperties: false
       properties:
         name:
           type: string
           minLength: 1
           description: Non-empty; cannot be cleared.
+        feed:
+          type: string
+          description: |
+            The quote feed for historical prices, by its stable id (`YAHOO`,
+            `MANUAL`, …). Must name a feed this build has, or the patch is
+            rejected 422 `invalid-value`; it cannot be cleared — `MANUAL` is
+            the "no automatic updates" choice. Whether the feed can serve the
+            instrument (Yahoo needs a `tickerSymbol`, say) is feed-specific
+            and not validated here: a feed that cannot deliver reports the
+            instrument on the daemon's refresh failure list.
+        latestFeed:
+          type: [string, "null"]
+          description: |
+            The feed for the latest (intraday) quote, by id, or `null` to fall
+            back to `feed`.
         currencyCode:
           type: [string, "null"]
           description: |
