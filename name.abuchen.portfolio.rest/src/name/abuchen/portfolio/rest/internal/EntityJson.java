@@ -1296,6 +1296,20 @@ public final class EntityJson
 
         json.add("owner", toJsonOwner(pair));
 
+        // The other side of a cross entry - the cash account a buy debited, the
+        // receiving end of a transfer. It is what the list's de-duplication
+        // otherwise hides: only one leg survives, reported under its own owner,
+        // so without this a consumer cannot tell which account the money touched.
+        var crossEntry = transaction.getCrossEntry();
+        if (crossEntry != null)
+        {
+            var crossOwner = crossEntry.getCrossOwner(transaction);
+            if (crossOwner instanceof Account account)
+                json.add("counterOwner", toJsonOwner(account));
+            else if (crossOwner instanceof Portfolio portfolio)
+                json.add("counterOwner", toJsonOwner(portfolio));
+        }
+
         if (transaction.getNote() != null)
             json.addProperty("note", transaction.getNote());
 
@@ -1304,21 +1318,26 @@ public final class EntityJson
 
     private static JsonObject toJsonOwner(TransactionPair<?> pair)
     {
-        var json = new JsonObject();
         if (pair.isAccountTransaction())
-        {
-            var account = (Account) pair.getOwner();
-            json.addProperty("uuid", account.getUUID());
-            json.addProperty("name", account.getName());
-            json.addProperty("type", "cash-account");
-        }
-        else
-        {
-            var portfolio = (Portfolio) pair.getOwner();
-            json.addProperty("uuid", portfolio.getUUID());
-            json.addProperty("name", portfolio.getName());
-            json.addProperty("type", "investment-account");
-        }
+            return toJsonOwner((Account) pair.getOwner());
+        return toJsonOwner((Portfolio) pair.getOwner());
+    }
+
+    private static JsonObject toJsonOwner(Account account)
+    {
+        var json = new JsonObject();
+        json.addProperty("uuid", account.getUUID());
+        json.addProperty("name", account.getName());
+        json.addProperty("type", "cash-account");
+        return json;
+    }
+
+    private static JsonObject toJsonOwner(Portfolio portfolio)
+    {
+        var json = new JsonObject();
+        json.addProperty("uuid", portfolio.getUUID());
+        json.addProperty("name", portfolio.getName());
+        json.addProperty("type", "investment-account");
         return json;
     }
 

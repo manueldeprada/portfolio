@@ -3415,6 +3415,27 @@ components:
             type:
               type: string
               enum: [cash-account, investment-account]
+        counterOwner:
+          type: object
+          description: |
+            The other side of a cross entry: the cash account a `buy`/`sell`
+            settled against, or the receiving end of a `transfer-out` or a
+            security transfer. The list de-duplicates a cross entry to one leg,
+            reported under its own `owner` — this is what still names the
+            account the money moved to or from. Omitted for a transaction that
+            is not a cross entry.
+          required: [uuid, name, type]
+          properties:
+            uuid:
+              type: string
+              description: |
+                Joins to `GET .../cash-accounts/{uuid}` (type `cash-account`) or
+                `GET .../investment-accounts/{uuid}` (type `investment-account`).
+            name:
+              type: string
+            type:
+              type: string
+              enum: [cash-account, investment-account]
         note:
           type: string
           description: Omitted when not set.
