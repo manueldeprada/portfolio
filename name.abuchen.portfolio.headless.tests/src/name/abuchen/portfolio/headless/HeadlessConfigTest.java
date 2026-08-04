@@ -137,12 +137,17 @@ public class HeadlessConfigTest
                         "must differ from port");
     }
 
-    /** A daemon with nothing to serve is a configuration mistake, not a valid state. */
+    /**
+     * A daemon with no configured files is a normal state, not a mistake: the control
+     * API opens them (see ControlServer), and a web service in front of this starts
+     * with none until an account uploads one. It used to be rejected, back when the
+     * configuration was the only way a file could ever be open.
+     */
     @Test
-    public void testAConfigWithoutFilesIsRejected()
+    public void testAConfigWithoutFilesIsAccepted() throws IOException
     {
-        assertRejected("{\"files\":[]}", "serve nothing");
-        assertRejected("{}", "serve nothing");
+        assertThat(read("{\"files\":[]}").files().isEmpty(), is(true));
+        assertThat(read("{}").files().isEmpty(), is(true));
     }
 
     @Test

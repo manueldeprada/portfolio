@@ -9,8 +9,10 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.List;
+import java.util.UUID;
 
 import org.eclipse.core.runtime.NullProgressMonitor;
+import org.eclipse.core.runtime.preferences.InstanceScope;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
@@ -18,6 +20,7 @@ import org.junit.rules.TemporaryFolder;
 import name.abuchen.portfolio.model.Client;
 import name.abuchen.portfolio.model.ClientFactory;
 import name.abuchen.portfolio.model.Security;
+import name.abuchen.portfolio.rest.FileAccessRegistry;
 
 /**
  * Autosave is what makes a write through the API mean anything: phase 1 mutated the
@@ -40,10 +43,24 @@ public class AutoSaverTest
         return new HeadlessHost.LoadedFile(target.getAbsolutePath(), "a", client);
     }
 
+    /**
+     * A file set holding one file that was never loaded from disk. The registry node is
+     * this test's own, so nothing here touches the workspace another test reads.
+     */
+    private FileSet setOf(HeadlessHost.LoadedFile file)
+    {
+        var registry = new FileAccessRegistry(InstanceScope.INSTANCE.getNode("headless-autosave-" + UUID.randomUUID()));
+        var set = new FileSet(registry, 5712, false);
+        set.adopt(file);
+        return set;
+    }
+
     /** Sweeps once, synchronously, and cleans up. */
     private void sweep(HeadlessHost host, HeadlessHost.LoadedFile file)
     {
-        new AutoSaver(host, List.of(file)).shutdown();
+        var set = setOf(file);
+        set.attach(host);
+        new AutoSaver(set).shutdown();
     }
 
     @Test
@@ -51,7 +68,7 @@ public class AutoSaverTest
     {
         var target = new File(folder.getRoot(), "portfolio.xml");
         var file = fileAt(target);
-        var host = new HeadlessHost(List.of(file));
+        var host = new HeadlessHost(List::of);
 
         try
         {
@@ -85,7 +102,7 @@ public class AutoSaverTest
     {
         var target = new File(folder.getRoot(), "untouched.xml");
         var file = fileAt(target);
-        var host = new HeadlessHost(List.of(file));
+        var host = new HeadlessHost(List::of);
 
         try
         {
@@ -110,7 +127,7 @@ public class AutoSaverTest
         // A directory where the file should be: FileOutputStream cannot open it.
         var target = folder.newFolder("not-a-file.xml");
         var file = fileAt(target);
-        var host = new HeadlessHost(List.of(file));
+        var host = new HeadlessHost(List::of);
 
         try
         {

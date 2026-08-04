@@ -39,6 +39,12 @@ import com.google.gson.JsonSyntaxException;
  * A password is named, never written here: the config file sits next to the
  * portfolio file and is meant to be readable, so an encrypted file's password is
  * taken from the named environment variable instead.
+ * <p>
+ * <strong>Every key is optional, {@code files} included.</strong> The files listed
+ * here are the ones this process opens at startup and owns for its lifetime; anything
+ * the control API opens later (see {@link ControlServer}) is not written back here,
+ * because in that mode the caller is the one keeping the list of who owns what and
+ * this file would be a second, stale copy of it.
  */
 public record HeadlessConfig(int port, int healthPort, int workerThreads, List<FileEntry> files, List<String> clients,
                 Duration autosave, boolean backupOnStart, Duration exchangeRateTimeout, Duration quoteRefresh)
@@ -130,9 +136,11 @@ public record HeadlessConfig(int port, int healthPort, int workerThreads, List<F
             }
         }
 
-        if (files.isEmpty())
-            throw new IOException(source + ": \"files\" is empty, so the daemon would serve nothing");
-
+        // Deliberately allowed to be empty. It used to be an error, on the grounds that
+        // a daemon serving nothing is a misconfiguration - which was true while the
+        // configuration was the only way a file could ever be open. It is not any more:
+        // the control API opens them (see ControlServer), and the backend of a web
+        // service starts with no files at all until an account uploads one.
         var clients = new ArrayList<String>();
         if (json.has("clients"))
         {

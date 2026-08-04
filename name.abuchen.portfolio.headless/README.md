@@ -14,8 +14,9 @@ churn cannot conflict with it beyond the three small SPI interfaces.
 
 | Desktop provides | Headless equivalent |
 | --- | --- |
-| Open files (the user opened them) | `files` in the config, loaded with `ClientFactory.load` at startup |
-| Which files the API may see (a checkbox) | `alias` + `enabled` written into the registry from the same config |
+| Open files (the user opened them) | `FileSet`: seeded from `files` in the config, changed at runtime over the control API |
+| Opening, creating, duplicating, closing a file (menu commands) | `POST`/`DELETE /files` on the control port |
+| Which files the API may see (a checkbox) | every file in the `FileSet` is registry-enabled while it is open |
 | A UI thread serializing model access | a single dedicated thread in `HeadlessHost.syncExec` |
 | An approval dialog for pairing | pre-provisioned tokens; pairing requests are declined |
 | "The user is editing" (`423`) | always false; no request is ever answered `423` |
@@ -23,7 +24,7 @@ churn cannot conflict with it beyond the three small SPI interfaces.
 | A user who saves | `AutoSaver`, sweeping dirty files on an interval |
 | `StartupAddon`'s exchange-rate job | `ExchangeRateRefresher`, blocking startup for the first download |
 | `UpdatePricesJob` (imports SWT) | `QuoteRefresher`, same feeds, results applied on the model thread |
-| Nothing | `HealthServer` - `GET /health` on a port of its own |
+| Nothing | `ControlServer` - `GET /health` and the file routes, on a port of its own |
 
 The change counter has to mean exactly what `ClientInput`'s does, because it is what
 every file-scoped response validates its ETag against: it moves on each model change,
@@ -91,16 +92,22 @@ its own - comparing it against a desktop instance, or serving a file read-only.
 }
 ```
 
-Only `files` is required. Every duration names its unit in its key, so a number
-cannot be misread, and **0 disables** each of them consistently (`healthPort` too).
+**Every key is optional, `files` included.** Those files are the ones the daemon opens
+at startup; anything opened later over the control API is not written back here, because
+in that mode the caller is what keeps the list of who owns which file and this file would
+be a second, stale copy of it. A daemon serving nothing yet is a normal state - it is
+what a web service in front of it looks like before any account has uploaded anything.
+
+Every duration names its unit in its key, so a number cannot be misread, and **0
+disables** each of them consistently (`healthPort` too).
 
 | Key | Default | What it does |
 | --- | --- | --- |
 | `port` | 5712 | the REST API. Refuses to start if something already listens here |
-| `healthPort` | `port + 1` | `GET /health`. A port already in use here is a warning, not a refusal |
+| `healthPort` | `port + 1` | the control port: `GET /health` plus the file routes. A port already in use here is a warning, not a refusal |
 | `workerThreads` | 8 | HTTP workers. The desktop fixes this at 2, which queues everything behind one slow calculation |
 | `autosaveSeconds` | 60 | sweep interval for dirty files, and the bound on work at risk |
-| `backupOnStart` | true | one `<name>.backup-after-open.<ext>` copy before the daemon writes anything |
+| `backupOnStart` | true | one `<name>.backup-after-open.<ext>` copy of each file as it is opened, before the daemon writes to it |
 | `quoteRefreshMinutes` | 60 | price update cadence; the first cycle runs at startup |
 | `exchangeRateTimeoutSeconds` | 60 | how long startup waits for the first rate download before serving anyway |
 
@@ -168,11 +175,27 @@ sweep retries, and shows up in `/health` as `saveError`.
 `stop()` flushes whatever is still dirty, and a JVM shutdown hook calls it, so a
 `SIGTERM` does not cost the last interval of work. **Never `kill -9` the daemon.**
 
-## Health
+## The control port
 
-`GET /health` on `healthPort`, unauthenticated, loopback only, on a port of its own -
-a liveness probe cannot present a bearer token, and the REST API's contract is
-`openapi.yaml`, which describes the desktop's API too.
+`ControlServer` binds `healthPort`, loopback only, and serves two things that do not
+belong on the REST API: liveness, and the file administration a web service in front of
+this daemon needs. Neither belongs in `openapi.yaml`, which describes the desktop's API
+too - a probe cannot present a bearer token, and the desktop has no equivalent of "open
+this path as a file" because a user opens files by hand.
+
+```
+GET    /health                    no token; liveness, plus what is degraded
+GET    /files                     token; what is open, with each file's id
+POST   /files                     token; open, create or copy one
+DELETE /files/{id}[?save=false]   token; save, release and forget one
+```
+
+**The file routes take the same bearer token the REST API takes**, and `/health`
+deliberately does not. Opening and deleting files is not something anything that can
+reach the port may do; the token is what an operator has to hand out to have an API
+client at all, so there is one set of credentials rather than two.
+
+### GET /health
 
 ```json
 {
@@ -190,22 +213,76 @@ a liveness probe cannot present a bearer token, and the REST API's contract is
 offline, or failing to save, is reported as `"status": "degraded"`; neither is fixed by
 a restart, and the daemon is still answering every request correctly from the data it
 has. Reserve a non-200 for "this process cannot serve", which here means not answering.
-`dirty` is the normal state between two sweeps and is reported without being a failure.
+`dirty` is the normal state between two sweeps and is reported without being a failure,
+and so is an empty `files` array.
+
+### The file routes
+
+```bash
+# open a file that exists
+curl -H "Authorization: Bearer $TOKEN" -d '{"path":"/srv/pp/acct/main.portfolio"}' :5713/files
+
+# create an empty one, in the desktop's own default format for a new file
+curl -H "Authorization: Bearer $TOKEN" \
+     -d '{"path":"/srv/pp/acct/new.portfolio","create":true,"baseCurrency":"CHF"}' :5713/files
+
+# duplicate an open one, unsaved changes included
+curl -H "Authorization: Bearer $TOKEN" \
+     -d '{"path":"/srv/pp/acct/copy.portfolio","copyOf":"<id>"}' :5713/files
+
+# give one up: saved if dirty, unlocked, and forgotten
+curl -X DELETE -H "Authorization: Bearer $TOKEN" :5713/files/<id>
+```
+
+The `id` in the response is the registry uuid, which is what `GET /v1/files` reports and
+what every REST path addresses the file by - so a caller stores that and needs to know
+nothing else about where the file lives.
+
+Five properties worth preserving, each of which cost a decision:
+
+- **An open is idempotent.** A file already open answers `200` with `"created": false`
+  rather than being loaded a second time into a second in-memory copy. That is what lets
+  a caller re-assert its whole list of files on every start without tracking what the
+  daemon already has - which is how the BFF recovers from a daemon restart.
+- **A copy is written from the live model on the model thread**, not copied on disk, so
+  the source's unsaved changes are part of what is duplicated. It uses `exportAs`, not
+  `saveAs`: `saveAs` adopts the flags it wrote onto the *source* client, which would
+  quietly change the format the original is saved in from then on. An **encrypted**
+  source is refused - its password is not kept after the load, so the copy could only be
+  written unencrypted, and dropping a file's encryption on a user's behalf is not a
+  thing to do silently.
+- **A close saves, unless the caller says not to.** `?save=false` is for a caller that
+  is about to delete the file: writing it one last time first is work whose only effect
+  is a longer window in which the file exists.
+- **Closing releases the file lock and forgets the registry record.** One owner per file
+  still holds for files opened at runtime, and a workspace that accumulated a record per
+  file ever served would be one nobody could read. A path that comes back therefore
+  comes back with a new id.
+- **A failed load leaves nothing behind.** The lock is claimed before the file is read
+  and released if the load throws, or the next attempt would be refused for a reason
+  that has nothing to do with why the first one failed. `404` for nothing at that path,
+  `422` for something that is a file but not a portfolio file, `409` for a file another
+  instance owns.
+
+**Deleting the file itself is the caller's job**, not this daemon's: it owns the
+directory layout, and a close leaves a file that is complete and openable. What the
+daemon owns is that the file is flushed and unlocked first.
 
 ## One owner per file
 
 Two instances must not own one `.portfolio` file: each keeps its own in-memory copy
 and whichever saves last silently discards the other's work. **Now that the daemon
-saves by itself, this is no longer a theoretical risk.** The daemon refuses to start
-rather than let it happen. Three guards, in the order they fire:
+saves by itself, this is no longer a theoretical risk.** The daemon refuses to start,
+or refuses the file, rather than let it happen. Three guards, in the order they fire:
 
 1. **The port.** Something already listening on the configured port is almost
    certainly another instance (the desktop with its API enabled, or another daemon).
    Checked before anything is loaded, because the bind failure further down says far
    less.
 2. **The file** (`PortfolioFileLock`). An exclusive OS lock on a sidecar
-   `<file>.lock`, held for the process lifetime and claimed *before* the file is
-   read. The refusal names the holder: `held by pid=40854 port=5713 since=...`.
+   `<file>.lock`, held for as long as the file is open and claimed *before* the file is
+   read - including for a file opened at runtime, which is answered `409` if another
+   instance holds it. The refusal names the holder: `held by pid=40854 port=5713 since=...`.
    Because it is an OS lock and not a PID file it cannot go stale - if the holder
    dies the kernel releases it. The sidecar itself is left behind on exit, which is
    harmless: the lock is what excludes, not the file's existence.
@@ -228,6 +305,13 @@ Phases 1 to 3 of the plan this was built from are done. The daemon serves every 
 endpoint with responses matching the desktop's, keeps its rates and quotes current,
 persists what the API writes, reports its own health, and ships as one artifact
 alongside the BFF (`../../scripts/package-headless.sh`).
+
+Since then the set of open files became **mutable at runtime** (`FileSet` plus the
+control port's file routes), which is what lets the BFF give each account its own
+portfolio files and let it upload, duplicate and delete them. The daemon holds no notion
+of an account: it owns files, one lock each, and answers by id. Who may see which file is
+the BFF's to enforce, and deliberately so - putting tenancy in here would mean a second
+identity model next to the one that already has the sessions and the passwords.
 
 Verified against the real 520-transaction file with a desktop instance running
 alongside on its own port, both queried in one request batch so prices could not drift

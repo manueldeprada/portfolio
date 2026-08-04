@@ -1,26 +1,20 @@
 package name.abuchen.portfolio.headless;
 
-import java.io.File;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 
-import org.eclipse.core.runtime.NullProgressMonitor;
 import org.eclipse.equinox.app.IApplication;
 import org.eclipse.equinox.app.IApplicationContext;
 
 import name.abuchen.portfolio.PortfolioLog;
-import name.abuchen.portfolio.model.ClientFactory;
 import name.abuchen.portfolio.rest.ApiRoutes;
 import name.abuchen.portfolio.rest.ClientStore;
-import name.abuchen.portfolio.rest.FileAccessRegistry;
 import name.abuchen.portfolio.rest.PairingService;
 import name.abuchen.portfolio.rest.RestApiServer;
 import name.abuchen.portfolio.rest.RestApiWorkspace;
@@ -37,12 +31,14 @@ import name.abuchen.portfolio.rest.RestApiWorkspace;
  * it, and a daemon has to do for itself: {@link ExchangeRateRefresher} (without
  * which every converted figure is wrong), {@link QuoteRefresher},
  * {@link AutoSaver} (without which every write is lost on exit), and
- * {@link HealthServer}.
+ * {@link ControlServer}.
  * <p>
- * Two things the desktop provides that are configuration here: which files are open
- * (loaded from the config at startup, and owned by this process for its lifetime),
- * and which files are exposed over the API (enabled in the registry from the same
- * config, instead of a checkbox in the preferences).
+ * Which files are open, and which of them the API exposes, is what the desktop learns
+ * from a user and this process does not. Both come from {@link FileSet}: seeded from
+ * the configuration at startup, and changed at runtime by whatever manages this daemon
+ * over the control API. <strong>A daemon serving no files at all is a normal
+ * state</strong> - it is what a fresh install of a web service in front of it looks
+ * like, before any account has uploaded anything.
  * <p>
  * <strong>One owner per file.</strong> This daemon and the desktop application must
  * not hold the same {@code .portfolio} file open at once: each keeps its own
@@ -64,12 +60,12 @@ public class HeadlessApplication implements IApplication
     private final CountDownLatch stopped = new CountDownLatch(1);
 
     private RestApiServer server;
-    private HealthServer healthServer;
+    private ControlServer controlServer;
     private HeadlessHost host;
+    private FileSet files;
     private AutoSaver autoSaver;
     private ExchangeRateRefresher exchangeRates;
     private QuoteRefresher quotes;
-    private final List<PortfolioFileLock> locks = new ArrayList<>();
 
     @Override
     public Object start(IApplicationContext context) throws Exception
@@ -99,49 +95,44 @@ public class HeadlessApplication implements IApplication
         var registry = RestApiWorkspace.createFileAccessRegistry();
         var clientStore = RestApiWorkspace.getClientStore();
 
-        var files = new ArrayList<HeadlessHost.LoadedFile>();
+        files = new FileSet(registry, config.port(), config.backupOnStart());
+
         for (var entry : config.files())
         {
             try
             {
-                // Claimed before it is read: refusing after loading would leave a
-                // second copy of a file this process does not own in memory.
-                locks.add(PortfolioFileLock.acquire(entry.path(), config.port()));
+                char[] password = password(entry);
+                try
+                {
+                    files.open(entry.path(), password, entry.alias());
+                }
+                finally
+                {
+                    FileSet.wipe(password);
+                }
             }
             catch (PortfolioFileLock.FileInUseException e)
             {
+                // Another instance owns this file. Refusing to start is the point: the
+                // operator asked for it, and serving the rest silently would leave them
+                // reading a file list that is missing one.
                 PortfolioLog.error(e.getMessage());
-                PortfolioFileLock.releaseAll(locks);
+                files.releaseLocks();
                 return Integer.valueOf(IApplication.EXIT_OK);
             }
-            catch (PortfolioFileLock.UnsupportedLockException e)
+            catch (IOException | RuntimeException e)
             {
-                // A network share that cannot lock. Refusing to serve there would be
-                // worse than the risk, but the operator has to know the guarantee is
-                // not in force for this file. Per file, so one unlockable share does
-                // not stop the others being claimed.
-                PortfolioLog.warning(e.getMessage() + " - serving it anyway, but nothing prevents"
-                                + " a second instance from owning it.");
+                // Not fatal any more: a daemon with no files is a normal state now that
+                // the control API can open them, so one unreadable file in the config
+                // is worth a line in the log rather than a refusal to start.
+                PortfolioLog.error("Could not open " + entry.path() + ": " + e.getMessage());
             }
-
-            files.add(open(entry, registry));
         }
-
-        if (files.isEmpty())
-        {
-            PortfolioLog.error("No configured file could be opened; not starting the server.");
-            PortfolioFileLock.releaseAll(locks);
-            return Integer.valueOf(IApplication.EXIT_OK);
-        }
-
-        // Before the first write, and only once: one copy of each file as it was
-        // handed over. The daemon saves by itself from here on.
-        if (config.backupOnStart())
-            AutoSaver.backup(files);
 
         provisionClients(config, clientStore);
 
-        host = new HeadlessHost(files);
+        host = new HeadlessHost(files::listOpenFiles);
+        files.attach(host);
 
         exchangeRates = new ExchangeRateRefresher(files);
 
@@ -177,7 +168,7 @@ public class HeadlessApplication implements IApplication
         }
         else
         {
-            autoSaver = new AutoSaver(host, files);
+            autoSaver = new AutoSaver(files);
             autoSaver.start(config.autosave());
         }
 
@@ -185,7 +176,7 @@ public class HeadlessApplication implements IApplication
         if (!config.quoteRefresh().isZero())
             quotes.start(config.quoteRefresh());
 
-        startHealthServer(config, files);
+        startControlServer(config, clientStore);
 
         // A daemon is stopped with a signal, not by closing a window. Equinox does
         // call stop() when the framework shuts down cleanly, but the unsaved work
@@ -194,7 +185,7 @@ public class HeadlessApplication implements IApplication
         Runtime.getRuntime().addShutdownHook(new Thread(this::stop, "pp-headless-shutdown"));
 
         PortfolioLog.info("Portfolio Performance headless API listening on 127.0.0.1:" + server.getPort()
-                        + " serving " + files.size() + " file(s)");
+                        + " serving " + files.list().size() + " file(s)");
 
         context.applicationRunning();
         stopped.await();
@@ -216,10 +207,10 @@ public class HeadlessApplication implements IApplication
             server.stop();
             server = null;
         }
-        if (healthServer != null)
+        if (controlServer != null)
         {
-            healthServer.stop();
-            healthServer = null;
+            controlServer.stop();
+            controlServer = null;
         }
 
         shutdownComponents();
@@ -254,59 +245,38 @@ public class HeadlessApplication implements IApplication
             host = null;
         }
 
-        PortfolioFileLock.releaseAll(locks);
-        locks.clear();
+        if (files != null)
+            files.releaseLocks();
     }
 
     /**
      * A liveness probe is not correctness, so a port already taken is a warning and
      * the daemon serves the API without one - unlike the API's own port, where
      * something already listening means another instance owns these files.
+     * <p>
+     * The file administration on the same port goes with it: a caller that cannot
+     * reach the control API can still read and write through the REST API, which is
+     * exactly the daemon this module started out as.
      */
-    private void startHealthServer(HeadlessConfig config, List<HeadlessHost.LoadedFile> files)
+    private void startControlServer(HeadlessConfig config, ClientStore clientStore)
     {
         if (config.healthPort() == 0)
             return;
 
-        healthServer = new HealthServer(config.healthPort(), config.port(), files, exchangeRates, quotes);
+        controlServer = new ControlServer(config.healthPort(), config.port(), files, exchangeRates, quotes,
+                        token -> clientStore.authenticate(token).isPresent());
         try
         {
-            healthServer.start();
-            PortfolioLog.info("Health endpoint on http://127.0.0.1:" + config.healthPort() + "/health");
+            controlServer.start();
+            PortfolioLog.info("Health endpoint on http://127.0.0.1:" + config.healthPort() + "/health"
+                            + ", file administration on the same port");
         }
         catch (IOException e)
         {
-            healthServer = null;
-            PortfolioLog.warning("Could not bind the health endpoint on port " + config.healthPort() + " ("
+            controlServer = null;
+            PortfolioLog.warning("Could not bind the control endpoint on port " + config.healthPort() + " ("
                             + e.getMessage() + "); serving the API without it.");
         }
-    }
-
-    /**
-     * Loads one file and registers it as API-accessible. The registry is the same
-     * store the desktop's preference page writes, so a record already there (uuid,
-     * alias) is reused rather than replaced - the uuid is what clients address the
-     * file by, and regenerating it would break every stored URL.
-     */
-    private static HeadlessHost.LoadedFile open(HeadlessConfig.FileEntry entry, FileAccessRegistry registry)
-                    throws IOException
-    {
-        var file = entry.path().toFile();
-        if (!file.isFile())
-            throw new IOException("Not a file: " + entry.path());
-
-        var password = password(entry);
-        var client = ClientFactory.load(file, password, new NullProgressMonitor());
-        if (password != null)
-            Arrays.fill(password, '\0');
-
-        var path = file.getAbsolutePath();
-        registry.ensureRecord(path);
-        registry.setEnabled(path, true);
-        if (entry.alias() != null)
-            registry.setAlias(path, entry.alias());
-
-        return new HeadlessHost.LoadedFile(path, labelOf(file), client);
     }
 
     /**
@@ -324,14 +294,6 @@ public class HeadlessApplication implements IApplication
             throw new IOException(entry.path() + " needs the password in $" + entry.passwordEnv() + ", which is unset");
 
         return value.toCharArray();
-    }
-
-    /** The file name without its extension, matching what the desktop shows. */
-    private static String labelOf(File file)
-    {
-        var name = file.getName();
-        var dot = name.lastIndexOf('.');
-        return dot > 0 ? name.substring(0, dot) : name;
     }
 
     /**

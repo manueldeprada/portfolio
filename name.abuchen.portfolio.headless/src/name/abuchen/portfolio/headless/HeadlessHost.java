@@ -9,6 +9,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Supplier;
 
 import name.abuchen.portfolio.model.Client;
 import name.abuchen.portfolio.money.ExchangeRateProviderFactory;
@@ -29,7 +30,8 @@ import name.abuchen.portfolio.rest.spi.OpenFile;
 public class HeadlessHost implements HostApplication
 {
     /**
-     * One open portfolio file, loaded once at startup and served until shutdown.
+     * One open portfolio file: loaded at startup or opened later through
+     * {@link FileSet}, and served until it is closed or the process ends.
      * <p>
      * A class rather than a record because it carries the change counter, and that
      * has to be mutable: every model change bumps it, which is what lets a response
@@ -174,13 +176,19 @@ public class HeadlessHost implements HostApplication
         }
     }
 
-    private final List<OpenFile> openFiles;
+    /**
+     * Asked on every call rather than copied once: a file can be opened or closed
+     * while the daemon runs (see {@link FileSet}), and a handler must see the set as
+     * it is now. Reading it is a copy of a small list behind that class's lock, which
+     * is cheaper than the request it serves by orders of magnitude.
+     */
+    private final Supplier<List<OpenFile>> openFiles;
     private final ExecutorService modelThread;
     private final Thread owner;
 
-    public HeadlessHost(List<? extends OpenFile> openFiles)
+    public HeadlessHost(Supplier<List<OpenFile>> openFiles)
     {
-        this.openFiles = List.copyOf(openFiles);
+        this.openFiles = openFiles;
 
         // Captured so syncExec can tell "already on the model thread" from "called
         // from a worker" - see the reentrancy note there.
@@ -212,7 +220,7 @@ public class HeadlessHost implements HostApplication
     @Override
     public List<OpenFile> listOpenFiles()
     {
-        return openFiles;
+        return openFiles.get();
     }
 
     /**

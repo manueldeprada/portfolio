@@ -26,11 +26,12 @@ public class HeadlessHostTest
 {
     private static HeadlessHost host()
     {
-        return new HeadlessHost(List.<OpenFile> of(new HeadlessHost.LoadedFile("/tmp/a.xml", "a", new Client())));
+        var file = new HeadlessHost.LoadedFile("/tmp/a.xml", "a", new Client());
+        return new HeadlessHost(() -> List.<OpenFile> of(file));
     }
 
     @Test
-    public void testTheConfiguredFilesAreReported() throws Exception
+    public void testTheOpenFilesAreReported() throws Exception
     {
         var host = host();
         try

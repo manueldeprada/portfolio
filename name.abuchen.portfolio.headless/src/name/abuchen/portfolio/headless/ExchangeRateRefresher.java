@@ -34,7 +34,7 @@ import name.abuchen.portfolio.money.ExchangeRateProviderFactory;
  * file's change counter, because every converted figure in every cached response has
  * just changed.
  */
-public class ExchangeRateRefresher implements HealthServer.Refresh
+public class ExchangeRateRefresher implements ControlServer.Refresh
 {
     /**
      * The desktop's cadence, and for its reason: the ECB reference rates are
@@ -43,16 +43,20 @@ public class ExchangeRateRefresher implements HealthServer.Refresh
      */
     private static final Duration MAX_INTERVAL = Duration.ofHours(6);
 
-    private final List<HeadlessHost.LoadedFile> files;
+    /**
+     * Read on each refresh rather than copied once: a file opened after startup has to
+     * have its cached conversions invalidated by the next update like any other.
+     */
+    private final FileSet files;
     private final ScheduledExecutorService scheduler;
 
     private volatile boolean loaded;
     private volatile Instant lastUpdate;
     private volatile String lastError;
 
-    public ExchangeRateRefresher(List<HeadlessHost.LoadedFile> files)
+    public ExchangeRateRefresher(FileSet files)
     {
-        this.files = List.copyOf(files);
+        this.files = files;
         this.scheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
             var thread = new Thread(runnable, "pp-headless-exchange-rates"); //$NON-NLS-1$
             thread.setDaemon(true);
@@ -181,7 +185,7 @@ public class ExchangeRateRefresher implements HealthServer.Refresh
 
         loaded = true;
 
-        for (var file : files)
+        for (var file : files.list())
             file.onExchangeRatesUpdated();
 
         if (failures == 0)

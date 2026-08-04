@@ -42,7 +42,7 @@ import name.abuchen.portfolio.online.RateLimitExceededException;
  * rather than once per instrument.</li>
  * </ul>
  */
-public class QuoteRefresher implements HealthServer.Refresh
+public class QuoteRefresher implements ControlServer.Refresh
 {
     /**
      * One instrument's update against one feed. Split by what it fetches, matching
@@ -161,17 +161,19 @@ public class QuoteRefresher implements HealthServer.Refresh
     }
 
     private final HeadlessHost host;
-    private final List<HeadlessHost.LoadedFile> files;
+
+    /** Read on each cycle: a file opened after startup needs its quotes too. */
+    private final FileSet files;
     private final ScheduledExecutorService scheduler;
     private final ExecutorService fetchers;
 
     private volatile Instant lastUpdate;
     private volatile String lastError;
 
-    public QuoteRefresher(HeadlessHost host, List<HeadlessHost.LoadedFile> files)
+    public QuoteRefresher(HeadlessHost host, FileSet files)
     {
         this.host = host;
-        this.files = List.copyOf(files);
+        this.files = files;
         this.scheduler = Executors.newSingleThreadScheduledExecutor(runnable -> daemon(runnable, "pp-headless-quotes")); //$NON-NLS-1$
 
         // One thread per grouping criterion, capped: the criterion exists so that
@@ -219,7 +221,7 @@ public class QuoteRefresher implements HealthServer.Refresh
     {
         try
         {
-            for (var file : files)
+            for (var file : files.list())
                 refresh(file);
 
             lastUpdate = Instant.now();

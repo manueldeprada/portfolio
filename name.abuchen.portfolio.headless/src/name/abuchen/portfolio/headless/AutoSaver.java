@@ -11,7 +11,6 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 import name.abuchen.portfolio.PortfolioLog;
-import name.abuchen.portfolio.model.ClientFactory;
 
 /**
  * Persists what the API writes.
@@ -38,14 +37,17 @@ import name.abuchen.portfolio.model.ClientFactory;
  */
 public class AutoSaver
 {
-    private final HeadlessHost host;
-    private final List<HeadlessHost.LoadedFile> files;
+    /**
+     * Read on every sweep rather than copied once: files come and go while the daemon
+     * runs (see {@link FileSet}), and a sweep over the set as it was at startup would
+     * stop saving the moment anything was uploaded.
+     */
+    private final FileSet files;
     private final ScheduledExecutorService scheduler;
 
-    public AutoSaver(HeadlessHost host, List<HeadlessHost.LoadedFile> files)
+    public AutoSaver(FileSet files)
     {
-        this.host = host;
-        this.files = List.copyOf(files);
+        this.files = files;
         this.scheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
             var thread = new Thread(runnable, "pp-headless-autosave"); //$NON-NLS-1$
             thread.setDaemon(true);
@@ -84,35 +86,13 @@ public class AutoSaver
 
     private void sweep()
     {
-        for (var file : files)
+        // The write itself lives in FileSet, which is also where a close flushes a file
+        // on its way out: one implementation of "persist this file", so the two paths
+        // cannot drift on what the dirty mark means.
+        for (var file : files.list())
         {
             if (file.isDirty())
-                save(file);
-        }
-    }
-
-    private void save(HeadlessHost.LoadedFile file)
-    {
-        try
-        {
-            // Read before writing: a change that lands while the file is being written
-            // is not covered by what was written, so the mark must predate the write
-            // and the file stays dirty for the next sweep.
-            var mark = file.saveMark();
-
-            host.syncExec(() -> {
-                ClientFactory.save(file.getClient(), file.getFile());
-                return null;
-            });
-
-            file.markSaved(mark);
-        }
-        catch (Exception e) // NOSONAR - a read-only volume must not kill the daemon
-        {
-            // Left dirty on purpose, so the next sweep tries again and /health keeps
-            // reporting the file as unsaved for as long as it is.
-            file.markSaveFailed(e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName());
-            PortfolioLog.error("Could not save " + file.getPath() + ": " + e.getMessage());
+                files.flush(file);
         }
     }
 
