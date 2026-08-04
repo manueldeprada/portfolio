@@ -86,8 +86,13 @@ public class ControlServer
      */
     public interface QuoteControl extends Refresh
     {
-        /** One instrument that could not be updated in the last completed cycle. */
-        record Failure(String securityUuid, String securityName, String reason)
+        /**
+         * One instrument that could not be updated in the last completed cycle.
+         * {@code feed} is the failing feed's stable id ({@code PP}, {@code YAHOO},
+         * ...), which is what lets a client offer "switch this instrument to a
+         * feed that works here" rather than parsing the reason text.
+         */
+        record Failure(String securityUuid, String securityName, String feed, String reason)
         {
         }
 
@@ -475,6 +480,7 @@ public class ControlServer
             var entry = new JsonObject();
             entry.addProperty("uuid", failure.securityUuid());
             entry.addProperty("name", failure.securityName());
+            entry.addProperty("feed", failure.feed());
             entry.addProperty("reason", failure.reason());
             failures.add(entry);
         }

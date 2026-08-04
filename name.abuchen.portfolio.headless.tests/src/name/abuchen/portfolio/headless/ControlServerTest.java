@@ -425,7 +425,7 @@ public class ControlServerTest
     public void testARefreshCanBeQueuedAndItsOutcomeRead() throws IOException
     {
         var quotes = new FixedQuotes(Instant.parse("2026-08-04T09:00:00Z"), List.of(
-                        new ControlServer.QuoteControl.Failure("uuid-1", "ACME Corp", "no quotes returned")));
+                        new ControlServer.QuoteControl.Failure("uuid-1", "ACME Corp", "YAHOO", "no quotes returned")));
 
         var server = server(emptySet(), FixedRefresh.succeeded(), quotes);
         server.start();
@@ -444,6 +444,7 @@ public class ControlServerTest
             var failure = body.getAsJsonArray("failures").get(0).getAsJsonObject();
             assertThat(failure.get("uuid").getAsString(), is("uuid-1"));
             assertThat(failure.get("name").getAsString(), is("ACME Corp"));
+            assertThat(failure.get("feed").getAsString(), is("YAHOO"));
             assertThat(failure.get("reason").getAsString(), is("no quotes returned"));
 
             var triggered = request(port, "POST", "/quotes/refresh", null, TOKEN);

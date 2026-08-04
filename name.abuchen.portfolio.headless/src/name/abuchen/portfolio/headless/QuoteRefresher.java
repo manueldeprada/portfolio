@@ -445,6 +445,6 @@ public class QuoteRefresher implements ControlServer.QuoteControl
 
     private static Failure failureOf(Task task, String reason)
     {
-        return new Failure(task.security.getUUID(), task.security.getName(), reason);
+        return new Failure(task.security.getUUID(), task.security.getName(), task.feed.getId(), reason);
     }
 }

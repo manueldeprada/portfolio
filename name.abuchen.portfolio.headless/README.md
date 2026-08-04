@@ -165,8 +165,10 @@ request open for a minute would block `/health` behind it); the caller polls
 `GET /quotes` until `running` turns false. That status also reports, per instrument,
 what could not be updated in the last completed cycle - the feed needing a signed-in
 account, a rate limit, a feed that answered errors and no prices - so a client can
-show *which* prices are stale rather than a single error string. `/health` keeps only
-the one-line summary.
+show *which* prices are stale rather than a single error string, and each entry names
+the failing feed's id, which is what lets a client offer "switch this instrument to a
+feed that works here" without parsing the reason text. `/health` keeps only the
+one-line summary.
 
 ## Saving
 
