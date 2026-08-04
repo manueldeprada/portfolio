@@ -3,11 +3,14 @@ package name.abuchen.portfolio.model;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
+import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.EnumSet;
 
+import org.eclipse.core.runtime.NullProgressMonitor;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
@@ -206,5 +209,42 @@ public class ClientFactoryTest
         var flags = ClientFactory.getFlags(file);
         assertTrue(flags.contains(SaveFlag.XML));
         assertTrue(flags.contains(SaveFlag.ID_REFERENCES));
+    }
+    private static Client clientWith(String securityName)
+    {
+        var client = new Client();
+        client.setBaseCurrency("EUR");
+
+        var security = new Security();
+        security.setName(securityName);
+        security.setCurrencyCode("EUR");
+        client.addSecurity(security);
+
+        return client;
+    }
+
+    /**
+     * {@code updatedAt} is unset on anything built in memory that nothing has changed,
+     * and on anything read from a file old enough to predate the field. Saving such a
+     * model to the binary format used to fail on a null dereference, reported as an
+     * IOException naming neither the field nor the file.
+     */
+    @Test
+    public void testAModelWithNoUpdatedAtCanBeSavedAndReloaded() throws IOException
+    {
+        var file = new File(tempFolder.getRoot(), "no-timestamps.portfolio");
+
+        var client = clientWith("Never touched");
+        var security = client.getSecurities().get(0);
+        security.setUpdatedAt(null);
+
+        ClientFactory.saveAs(client, file, null, EnumSet.of(SaveFlag.BINARY, SaveFlag.COMPRESSED));
+
+        var reloaded = ClientFactory.load(file, null, new NullProgressMonitor());
+        assertEquals(1, reloaded.getSecurities().size());
+        assertEquals("Never touched", reloaded.getSecurities().get(0).getName());
+
+        // and it comes back unset rather than as an invented instant
+        assertEquals(null, reloaded.getSecurities().get(0).getUpdatedAt());
     }
 }
