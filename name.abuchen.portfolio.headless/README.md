@@ -114,7 +114,8 @@ disables** each of them consistently (`healthPort` too).
 A password is never written here, only named: the value is read from that
 environment variable, wiped after the load, and never kept. An encrypted file is
 re-encrypted from the key `ClientFactory.load` leaves on the `Client`, so autosave
-needs nothing further.
+needs nothing further - and that is also what lets a file opened over the control
+port with a password supplied once keep saving without it.
 
 A client listed in `clients` that has no token yet gets one minted at startup, logged
 **once** (the store only ever returns a token's plaintext at creation).
@@ -190,6 +191,12 @@ POST   /files                     token; open, create or copy one
 DELETE /files/{id}[?save=false]   token; save, release and forget one
 ```
 
+An encrypted file takes a `password` in the body, and the two answers a caller acts
+on differently are separate statuses: **`401 password-required`** when it needs one
+and **`403 password-rejected`** when the one given was wrong. Both are typed
+exceptions rather than the loader's own message, which is localized and says the same
+thing for a corrupt file.
+
 **The file routes take the same bearer token the REST API takes**, and `/health`
 deliberately does not. Opening and deleting files is not something anything that can
 reach the port may do; the token is what an operator has to hand out to have an API
@@ -247,10 +254,11 @@ Five properties worth preserving, each of which cost a decision:
 - **A copy is written from the live model on the model thread**, not copied on disk, so
   the source's unsaved changes are part of what is duplicated. It uses `exportAs`, not
   `saveAs`: `saveAs` adopts the flags it wrote onto the *source* client, which would
-  quietly change the format the original is saved in from then on. An **encrypted**
-  source is refused - its password is not kept after the load, so the copy could only be
-  written unencrypted, and dropping a file's encryption on a user's behalf is not a
-  thing to do silently.
+  quietly change the format the original is saved in from then on. A copy of an
+  **encrypted** source is encrypted too, with the password the caller supplies - the
+  source's own is not kept after the load, and writing the copy in the clear would drop
+  a file's protection on the user's behalf. A password on a plain file is ignored: a copy
+  is a copy, not a chance to add encryption the original does not have.
 - **A close saves, unless the caller says not to.** `?save=false` is for a caller that
   is about to delete the file: writing it one last time first is work whose only effect
   is a longer window in which the file exists.

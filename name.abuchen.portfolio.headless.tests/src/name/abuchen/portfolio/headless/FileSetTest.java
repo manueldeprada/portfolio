@@ -166,7 +166,7 @@ public class FileSetTest
         source.file().getClient().addSecurity(security("Only In Memory"));
         assertThat(source.file().isDirty(), is(true));
 
-        var copy = files.copy(source.id(), path("copy.portfolio"));
+        var copy = files.copy(source.id(), path("copy.portfolio"), null);
 
         assertThat(copy.id(), is(not(source.id())));
         assertThat(copy.file().getClient().getSecurities().size(), is(1));
@@ -182,7 +182,7 @@ public class FileSetTest
     {
         try
         {
-            files.copy(UUID.randomUUID().toString(), path("nowhere.portfolio"));
+            files.copy(UUID.randomUUID().toString(), path("nowhere.portfolio"), null);
             Assert.fail("expected an unknown source to be refused");
         }
         catch (java.nio.file.NoSuchFileException e)
@@ -274,5 +274,111 @@ public class FileSetTest
                 assertThat(claimed.lockFile(), is(PortfolioFileLock.lockFileFor(notAPortfolio)));
             }
         }
+    }
+    private Path encryptedFile(String name, String password) throws IOException
+    {
+        var target = path(name);
+        var client = new Client();
+        client.setBaseCurrency("EUR");
+        client.addSecurity(security("In an encrypted file"));
+        ClientFactory.saveAs(client, target.toFile(), password.toCharArray(), ClientFileType.BINARY_AES256.getFlags());
+        return target;
+    }
+
+    /**
+     * An encrypted file is refused with its own exception rather than the loader's
+     * message, which is localized and says the same thing for a corrupt file. The
+     * caller's answer to it is to ask a human, so it has to be able to tell.
+     */
+    @Test
+    public void testAnEncryptedFileWithoutAPasswordIsRefusedDistinguishably() throws Exception
+    {
+        var target = encryptedFile("locked.portfolio", "hunter2");
+
+        try
+        {
+            files.open(target, null);
+            Assert.fail("expected an encrypted file with no password to be refused");
+        }
+        catch (FileSet.PasswordRequiredException e)
+        {
+            assertThat(files.list().size(), is(0));
+        }
+
+        // and nothing is claimed, so the next attempt is not refused for the wrong reason
+        try (var claimed = PortfolioFileLock.acquire(target, 5712))
+        {
+            assertThat(Files.exists(claimed.lockFile()), is(true));
+        }
+    }
+
+    @Test
+    public void testAWrongPasswordIsItsOwnAnswer() throws Exception
+    {
+        var target = encryptedFile("locked.portfolio", "hunter2");
+
+        try
+        {
+            files.open(target, "not-it".toCharArray());
+            Assert.fail("expected a wrong password to be refused");
+        }
+        catch (FileSet.PasswordRejectedException e)
+        {
+            assertThat(files.list().size(), is(0));
+        }
+    }
+
+    @Test
+    public void testAnEncryptedFileOpensWithItsPasswordAndSavesWithoutIt() throws Exception
+    {
+        var target = encryptedFile("locked.portfolio", "hunter2");
+
+        var opened = files.open(target, "hunter2".toCharArray());
+        assertThat(opened.file().getClient().getSecurities().size(), is(1));
+
+        // The derived key stays on the client, which is what lets a write be persisted
+        // without the password being kept anywhere.
+        opened.file().getClient().addSecurity(security("Added after unlocking"));
+        files.close(opened.id(), true);
+
+        var reloaded = ClientFactory.load(target.toFile(), "hunter2".toCharArray(), new NullProgressMonitor());
+        assertThat(reloaded.getSecurities().size(), is(2));
+    }
+
+    /**
+     * A copy of an encrypted file is encrypted, with the password the caller supplied -
+     * the source's own is not kept, and writing the copy in the clear would drop a
+     * file's protection on the user's behalf.
+     */
+    @Test
+    public void testACopyOfAnEncryptedFileStaysEncrypted() throws Exception
+    {
+        var source = files.open(encryptedFile("locked.portfolio", "hunter2"), "hunter2".toCharArray());
+
+        try
+        {
+            files.copy(source.id(), path("copy.portfolio"), null);
+            Assert.fail("expected a copy with no password to be refused");
+        }
+        catch (FileSet.PasswordRequiredException e)
+        {
+            assertThat(Files.exists(path("copy.portfolio")), is(false));
+        }
+
+        var copy = files.copy(source.id(), path("copy.portfolio"), "hunter2".toCharArray());
+
+        assertThat(copy.file().getClient().getSecurities().size(), is(1));
+        assertThat(ClientFactory.isEncrypted(path("copy.portfolio").toFile()), is(true));
+    }
+
+    /** A password on a file that has none is not a way to add encryption to a copy. */
+    @Test
+    public void testAPasswordDoesNotEncryptTheCopyOfAPlainFile() throws Exception
+    {
+        var source = files.open(existingFile("plain.portfolio"), null);
+
+        files.copy(source.id(), path("copy.portfolio"), "hunter2".toCharArray());
+
+        assertThat(ClientFactory.isEncrypted(path("copy.portfolio").toFile()), is(false));
     }
 }

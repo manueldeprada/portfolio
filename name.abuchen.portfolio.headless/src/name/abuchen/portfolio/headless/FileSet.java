@@ -48,6 +48,32 @@ import name.abuchen.portfolio.rest.spi.OpenFile;
  */
 public class FileSet
 {
+    /**
+     * The file is encrypted and no password came with the request. Typed, because the
+     * caller has to be able to answer it by asking a human - a message from the model's
+     * loader is localized and cannot be switched on.
+     */
+    public static class PasswordRequiredException extends IOException
+    {
+        private static final long serialVersionUID = 1L;
+
+        public PasswordRequiredException(Path path)
+        {
+            super(path + " is encrypted and needs a password");
+        }
+    }
+
+    /** The password did not decrypt the file. Also typed, and for the same reason. */
+    public static class PasswordRejectedException extends IOException
+    {
+        private static final long serialVersionUID = 1L;
+
+        public PasswordRejectedException(Path path, String detail)
+        {
+            super(path + " could not be read with that password: " + detail);
+        }
+    }
+
     /** What was done to a file, for the caller's log line. */
     public enum Outcome
     {
@@ -64,6 +90,13 @@ public class FileSet
      * later opens it in the application sees nothing unusual.
      */
     private static final ClientFileType CREATE_FORMAT = ClientFileType.BINARY;
+
+    /**
+     * And the format a copy of an encrypted file is written in - the strongest of the
+     * two the desktop offers, since the alternative is only there for files that have
+     * to be read by an older build.
+     */
+    private static final ClientFileType ENCRYPTED_FORMAT = ClientFileType.BINARY_AES256;
 
     private final FileAccessRegistry registry;
     private final int port;
@@ -151,6 +184,13 @@ public class FileSet
         if (!file.isFile())
             throw new NoSuchFileException(absolute.toString());
 
+        // Asked before the file is claimed, because "this needs a password" is not a
+        // failure the caller should have to distinguish from a corrupt file: the loader
+        // reports both as an IOException with a localized message.
+        var encrypted = ClientFactory.isEncrypted(file);
+        if (encrypted && password == null)
+            throw new PasswordRequiredException(absolute);
+
         // Claimed before it is read: refusing after loading would leave a second copy
         // of a file this process does not own in memory.
         var lock = claim(absolute);
@@ -167,6 +207,11 @@ public class FileSet
             // to load is not, and holding it would lock out the next attempt.
             if (lock != null)
                 lock.close();
+
+            // For an encrypted file a wrong password is the overwhelmingly likely
+            // cause, and the one the caller can do something about.
+            if (encrypted)
+                throw new PasswordRejectedException(absolute, e.getMessage());
             throw e;
         }
 
@@ -239,16 +284,20 @@ public class FileSet
      * source's unsaved changes are part of what the caller asked to duplicate and a
      * byte copy of a file being written is not a file.
      *
-     * @throws IOException
-     *             if the source is encrypted. Its password is not kept after the load
-     *             (see {@link HeadlessApplication}), so the copy could only be written
-     *             unencrypted, and silently dropping a file's encryption is not a
-     *             thing to do on a user's behalf.
+     * @param password
+     *            for an encrypted source, the password to write the copy with - which is
+     *            also the password it is then opened with. Required, because the
+     *            source's own is not kept after the load (see
+     *            {@link HeadlessApplication}) and writing the copy unencrypted would
+     *            drop a file's protection on the user's behalf. Ignored for a source
+     *            that is not encrypted: a copy is a copy, not a chance to add
+     *            encryption where the original has none.
      */
-    public Opened copy(String sourceId, Path target) throws IOException
+    public Opened copy(String sourceId, Path target, char[] password) throws IOException
     {
         HeadlessHost.LoadedFile source;
         Path absolute;
+        boolean encrypted;
 
         synchronized (this)
         {
@@ -260,22 +309,35 @@ public class FileSet
 
             // Read off the file rather than the client: the model's save flags are
             // package-private, and the file on disk is the same answer.
-            if (ClientFactory.isEncrypted(source.getFile()))
-                throw new IOException("Cannot copy " + source.getLabel()
-                                + ": it is encrypted, and this process does not keep its password.");
+            encrypted = ClientFactory.isEncrypted(source.getFile());
+            if (encrypted && password == null)
+                throw new PasswordRequiredException(Path.of(source.getPath()));
 
             Files.createDirectories(absolute.getParent());
         }
 
+        var flags = encrypted ? ENCRYPTED_FORMAT.getFlags() : CREATE_FORMAT.getFlags();
+        var secret = encrypted ? password : null;
+
         // exportAs, not saveAs: saveAs adopts the flags it wrote onto the *source*
-        // client, so cloning a compressed XML file would quietly change the format
-        // the original is saved in from then on.
+        // client, so copying a compressed XML file would quietly change the format the
+        // original is saved in from then on.
         runOnModelThread(() -> {
-            ClientFactory.exportAs(source.getClient(), absolute.toFile(), null, CREATE_FORMAT.getFlags());
+            ClientFactory.exportAs(source.getClient(), absolute.toFile(), secret, flags);
             return null;
         });
 
-        return open(absolute, null);
+        try
+        {
+            return open(absolute, encrypted ? password : null);
+        }
+        catch (IOException | RuntimeException e)
+        {
+            // A copy nothing can open is worse than no copy: it would sit in the
+            // caller's directory as a file it has to explain.
+            Files.deleteIfExists(absolute);
+            throw e;
+        }
     }
 
     /**

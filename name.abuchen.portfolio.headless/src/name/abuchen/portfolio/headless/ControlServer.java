@@ -50,7 +50,10 @@ import name.abuchen.portfolio.PortfolioLog;
  * <pre>
  * GET    /health                    no token; liveness, plus what is degraded
  * GET    /files                     token; what is open, with each file's id
- * POST   /files                     token; open, create or copy one
+ * POST   /files                     token; open, create or copy one. An encrypted file
+ *                                   takes a password; without one the answer is 401
+ *                                   password-required, with a wrong one 403
+ *                                   password-rejected
  * DELETE /files/{id}[?save=false]   token; save, release and forget one
  * </pre>
  *
@@ -240,15 +243,17 @@ public class ControlServer
             return;
         }
 
+        var password = password(body);
+
         try
         {
             FileSet.Opened opened;
             if (copyOf != null)
-                opened = files.copy(copyOf, path);
+                opened = files.copy(copyOf, path, password);
             else if (create)
                 opened = files.create(path, body.has("baseCurrency") ? body.get("baseCurrency").getAsString() : null);
             else
-                opened = files.open(path, password(body));
+                opened = files.open(path, password);
 
             // 200 rather than 201 for a file that was already open: nothing was
             // created, and a caller re-asserting its whole list of files on startup
@@ -267,15 +272,33 @@ public class ControlServer
         {
             send(exchange, 409, error("in-use", e.getMessage()));
         }
+        catch (FileSet.PasswordRequiredException e)
+        {
+            // Its own code, so the caller can ask a human for the password instead of
+            // reporting the file as broken. 401 rather than 422: what is missing is a
+            // credential, and the request is otherwise perfectly formed.
+            send(exchange, 401, error("password-required", e.getMessage()));
+        }
+        catch (FileSet.PasswordRejectedException e)
+        {
+            send(exchange, 403, error("password-rejected", e.getMessage()));
+        }
         catch (IOException | RuntimeException e)
         {
-            // A file that is not a portfolio file, a corrupt one, a wrong password: all
-            // of them are the request's fault rather than this process's, and the
-            // message is the only thing that tells them apart.
+            // A file that is not a portfolio file, or a corrupt one: the request's fault
+            // rather than this process's, and the message is the only thing that tells
+            // them apart. Logged as the path and the reason - never the request body,
+            // which may hold a password.
             PortfolioLog.warning("Could not open " + path + ": " + e.getMessage());
             send(exchange, 422,
                             error("cannot-open",
                                             e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));
+        }
+        finally
+        {
+            // Wiped as soon as the load is done with it, so a heap dump taken later does
+            // not still hold it.
+            FileSet.wipe(password);
         }
     }
 
@@ -300,13 +323,27 @@ public class ControlServer
     }
 
     /**
-     * A password is named, never carried: the same rule the configuration file follows.
-     * In a request body it would be in this process's log the first time anything
-     * logged one, and there is nowhere for it to be less exposed than an environment
-     * variable the operator already controls.
+     * The password for an encrypted file, from one of two places.
+     * <p>
+     * {@code passwordEnv} names an environment variable, which is what a file listed in
+     * the configuration uses: that file sits next to the portfolio file and is meant to
+     * be readable, so a password must not be in it.
+     * <p>
+     * {@code password} carries the value itself, which is what a service in front of
+     * this daemon has - it asked a human a moment ago and holds it for the length of one
+     * request. There is no environment variable it could put it in, and the alternative
+     * is not supporting encrypted files at all. It is never logged, and nothing here
+     * keeps it: {@code ClientFactory.load} leaves the derived key on the client, which
+     * is what lets autosave re-encrypt without the password.
      */
     private static char[] password(JsonObject body)
     {
+        if (body.has("password"))
+        {
+            var value = body.get("password").getAsString();
+            return value.isEmpty() ? null : value.toCharArray();
+        }
+
         if (!body.has("passwordEnv"))
             return null;
 

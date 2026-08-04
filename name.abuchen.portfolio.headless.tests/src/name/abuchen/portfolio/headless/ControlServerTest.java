@@ -368,4 +368,50 @@ public class ControlServerTest
             connection.disconnect();
         }
     }
+    /**
+     * An encrypted file is what a human has to be asked about, so the two answers a
+     * caller acts on differently - "it needs a password" and "that password was wrong" -
+     * are distinct statuses rather than one 422 with a localized message in it.
+     */
+    @Test
+    public void testAnEncryptedFileIsAnsweredWithItsOwnStatuses() throws Exception
+    {
+        var files = emptySet();
+        var host = new HeadlessHost(files::listOpenFiles);
+        files.attach(host);
+
+        var server = server(files, FixedRefresh.succeeded());
+        server.start();
+
+        try
+        {
+            var port = server.boundPort();
+            var target = folder.getRoot().toPath().resolve("locked.portfolio");
+
+            var client = new Client();
+            client.setBaseCurrency("EUR");
+            ClientFactory.saveAs(client, target.toFile(), "hunter2".toCharArray(),
+                            ClientFileType.BINARY_AES256.getFlags());
+
+            var withoutPassword = request(port, "POST", "/files", "{\"path\":\"" + target + "\"}", TOKEN);
+            assertThat(withoutPassword.status(), is(401));
+            assertThat(json(withoutPassword.body()).get("error").getAsString(), is("password-required"));
+
+            var wrong = request(port, "POST", "/files",
+                            "{\"path\":\"" + target + "\",\"password\":\"nope\"}", TOKEN);
+            assertThat(wrong.status(), is(403));
+            assertThat(json(wrong.body()).get("error").getAsString(), is("password-rejected"));
+
+            var unlocked = request(port, "POST", "/files",
+                            "{\"path\":\"" + target + "\",\"password\":\"hunter2\"}", TOKEN);
+            assertThat(unlocked.status(), is(201));
+            assertThat(files.list().size(), is(1));
+        }
+        finally
+        {
+            server.stop();
+            host.shutdown();
+            files.releaseLocks();
+        }
+    }
 }
