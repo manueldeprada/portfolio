@@ -118,6 +118,10 @@ public final class ApiRoutes
                         (context, req) -> Response.json(200, AccountsHandler.get(context.client(), context.factory(),
                                         req.pathParam("uuid"), req.queryParam("date")))), //$NON-NLS-1$ //$NON-NLS-2$
                         "date"); //$NON-NLS-1$
+        router.add("GET", "/v1/files/{file}/cash-accounts/{uuid}/balances", read(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
+                        (client, req) -> Response.json(200, AccountsHandler.balances(client, req.pathParam("uuid"), //$NON-NLS-1$
+                                        req.queryParam("from"), req.queryParam("to")))), //$NON-NLS-1$ //$NON-NLS-2$
+                        "from", "to"); //$NON-NLS-1$ //$NON-NLS-2$
 
         router.add("GET", "/v1/files/{file}/investment-accounts", calc(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
                         (context, req) -> Response.json(200, PortfoliosHandler.list(context.client(), context.factory(),

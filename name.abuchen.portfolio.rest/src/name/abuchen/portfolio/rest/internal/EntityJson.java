@@ -821,6 +821,35 @@ public final class EntityJson
         return json;
     }
 
+    /**
+     * The daily closing balances of one cash account, shaped like
+     * {@link #securityPrices}: a bare decimal per day, the currency stated once at
+     * the top. {@code from}/{@code to} echo the range covered and are absent for a
+     * series that covers nothing.
+     */
+    public static JsonObject accountBalances(Account account, LocalDate from, long[] balances)
+    {
+        var items = new JsonArray();
+        for (var i = 0; i < balances.length; i++)
+        {
+            var json = new JsonObject();
+            json.addProperty("date", from.plusDays(i).toString());
+            json.add("balance", decimal(balances[i], Values.Amount.precision()));
+            items.add(json);
+        }
+
+        var json = new JsonObject();
+        json.addProperty("uuid", account.getUUID());
+        json.addProperty("currency", account.getCurrencyCode());
+        if (balances.length > 0)
+        {
+            json.addProperty("from", from.toString());
+            json.addProperty("to", from.plusDays(balances.length - 1L).toString());
+        }
+        json.add("items", items);
+        return json;
+    }
+
     private static JsonObject risk(Client client, PerformanceIndex index, LocalDate[] dates, double[] accumulated,
                     Risk.Drawdown drawdown, double[] drawdownSerie)
     {

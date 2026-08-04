@@ -756,6 +756,76 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /v1/files/{file}/cash-accounts/{uuid}/balances:
+    parameters:
+      - $ref: "#/components/parameters/File"
+      - $ref: "#/components/parameters/Uuid"
+    get:
+      operationId: listCashAccountBalances
+      tags: [Cash accounts]
+      summary: Read the daily balance series of a cash account
+      description: |
+        The account's balance at the end of each calendar day of a range — the
+        same running total the account itself reports for one `date`, reported
+        for every day at once, in the account's own currency and never
+        converted. This series cannot be rebuilt from the transactions list:
+        that list de-duplicates a cross entry to one leg, so a purchase's cash
+        debit is reported under the investment account and a transfer's
+        receiving leg not at all.
+
+        `from` and `to` are inclusive, and both are optional: `from` defaults
+        to the account's first transaction, `to` to today. The response echoes
+        the range it actually covers; an account with no transactions, or a
+        range ending before its first one, covers nothing rather than
+        reporting a flat line of zeros. The range is capped at 20 years, since
+        the response holds one entry per calendar day.
+      parameters:
+        - name: from
+          in: query
+          description: Earliest date to include, inclusive. Defaults to the account's first transaction.
+          schema:
+            type: string
+            format: date
+        - name: to
+          in: query
+          description: Latest date to include, inclusive. Defaults to today.
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: The account's daily closing balances over the requested range.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BalanceSeries"
+              examples:
+                default:
+                  value:
+                    uuid: c4b2a1e0-3f6d-4a2e-8b1c-5d7f9a0e2c46
+                    currency: CHF
+                    from: "2024-01-02"
+                    to: "2024-01-04"
+                    items:
+                      - date: "2024-01-02"
+                        balance: 1000.00
+                      - date: "2024-01-03"
+                        balance: 1000.00
+                      - date: "2024-01-04"
+                        balance: -250.50
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /v1/files/{file}/investment-accounts:
     parameters:
       - $ref: "#/components/parameters/File"
@@ -2935,6 +3005,51 @@ components:
           type: string
           format: date
         value:
+          type: number
+
+    BalanceSeries:
+      type: object
+      description: |
+        A cash account's balance at the end of each calendar day of a range,
+        oldest first. Shaped like `PriceSeries`: the currency is stated once for
+        the whole series, since every balance of an account is in the account's
+        own currency.
+      required: [uuid, currency, items]
+      properties:
+        uuid:
+          type: string
+          description: The cash account the series belongs to.
+        currency:
+          type: string
+          description: The account's own currency, which every `balance` is in.
+        from:
+          type: string
+          format: date
+          description: |
+            The date of the first point. Absent when the series covers nothing —
+            an account with no transactions, or a range ending before its first
+            one.
+        to:
+          type: string
+          format: date
+          description: |
+            The date of the last point. Absent when the series covers nothing.
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/BalancePoint"
+
+    BalancePoint:
+      type: object
+      description: |
+        One day's closing balance, in the series' currency. Negative when the
+        account is overdrawn — a margin debit.
+      required: [date, balance]
+      properties:
+        date:
+          type: string
+          format: date
+        balance:
           type: number
 
     CostBasis:
