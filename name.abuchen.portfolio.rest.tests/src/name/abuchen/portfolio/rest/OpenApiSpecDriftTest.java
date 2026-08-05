@@ -83,7 +83,8 @@ public class OpenApiSpecDriftTest
                     "TransactionCreate.type", //
                     "ImportPreviewItem.checks", //
                     "ImportPreviewItem.status", //
-                    "Transaction.counterOwner");
+                    "Transaction.counterOwner", //
+                    "TaxonomyAssignment.type");
 
     private IEclipsePreferences node;
 

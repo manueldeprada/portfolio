@@ -412,9 +412,7 @@ public final class EntityJson
 
                                     var entry = new JsonObject();
                                     entry.add("path", path); //$NON-NLS-1$
-                                    entry.add("weight", //$NON-NLS-1$
-                                                    decimal((double) assignment.getWeight()
-                                                                    / Classification.ONE_HUNDRED_PERCENT));
+                                    entry.add("weight", weight(assignment.getWeight())); //$NON-NLS-1$
                                     assignments.add(entry);
                                 });
             }
@@ -769,30 +767,92 @@ public final class EntityJson
         json.addProperty("id", taxonomy.getId());
         json.addProperty("name", taxonomy.getName());
 
+        // The template a taxonomy was built from, which the application records as
+        // the root's classification key. Absent for one somebody defined themselves,
+        // and that absence is the point: it is the only thing that tells a
+        // hand-built scheme apart from the stock ones every file starts with.
+        var template = taxonomy.getRoot() == null ? null : taxonomy.getRoot().getKey();
+        if (template != null && !template.isEmpty())
+            json.addProperty("template", template);
+
         var categories = new JsonArray();
-        for (Classification child : taxonomy.getRoot().getChildren())
+        for (Classification child : byRank(taxonomy.getRoot().getChildren()))
             categories.add(toJson(child));
         json.add("categories", categories);
 
         return json;
     }
 
+    /**
+     * One category. The {@code id} is the classification's own, stable across
+     * saves and the handle every write to the tree names it by; the
+     * {@code weight} is the rebalancing target the application stores, as a
+     * fraction <em>of the parent category</em> - the siblings of one parent are
+     * meant to sum to 1, which is the "weight error" the application flags when
+     * they do not.
+     */
     private static JsonObject toJson(Classification classification)
     {
         var json = new JsonObject();
+        json.addProperty("id", classification.getId());
         json.addProperty("name", classification.getName());
         if (classification.getColor() != null)
             json.addProperty("color", classification.getColor());
+        if (classification.getNote() != null)
+            json.addProperty("note", classification.getNote());
+        json.add("weight", weight(classification.getWeight()));
 
-        // Only present when the category has children: a leaf's empty array would be
-        // noise on every leaf of a deep taxonomy.
+        // Both lists are omitted when empty rather than reported as empty arrays:
+        // a deep taxonomy is mostly leaves, and most leaves hold no cash account.
+        var assignments = new JsonArray();
+        classification.getAssignments().stream() //
+                        .sorted(Comparator.comparingInt(Classification.Assignment::getRank)) //
+                        .forEach(assignment -> assignments.add(toJson(assignment)));
+        if (assignments.size() > 0)
+            json.add("assignments", assignments);
+
         var children = new JsonArray();
-        for (Classification child : classification.getChildren())
+        for (Classification child : byRank(classification.getChildren()))
             children.add(toJson(child));
         if (children.size() > 0)
             json.add("children", children);
 
         return json;
+    }
+
+    /**
+     * One vehicle assigned to a category. A weight below 1 is a split: the
+     * remainder sits in another category of the same taxonomy, or nowhere at
+     * all - the application shows what is left as unassigned, which is derived
+     * from the assignments rather than stored.
+     */
+    private static JsonObject toJson(Classification.Assignment assignment)
+    {
+        var vehicle = assignment.getInvestmentVehicle();
+
+        var json = new JsonObject();
+        json.addProperty("type", vehicle instanceof Security ? "instrument" : "cash-account");
+        json.addProperty("uuid", vehicle.getUUID());
+        json.addProperty("name", vehicle.getName());
+        json.add("weight", weight(assignment.getWeight()));
+
+        return json;
+    }
+
+    /**
+     * The application sorts a taxonomy's children by rank; reporting them in the
+     * model's own list order would show a tree the user has arranged in one order
+     * in another.
+     */
+    private static List<Classification> byRank(List<Classification> children)
+    {
+        return children.stream().sorted(Comparator.comparingInt(Classification::getRank)).toList();
+    }
+
+    /** a category's or an assignment's weight, as a fraction of the whole */
+    private static JsonElement weight(int weight)
+    {
+        return decimal((double) weight / Classification.ONE_HUNDRED_PERCENT);
     }
 
     /**

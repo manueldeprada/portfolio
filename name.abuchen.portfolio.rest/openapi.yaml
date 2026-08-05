@@ -938,6 +938,11 @@ paths:
         A taxonomy's root is not reported as a category — it names the taxonomy
         itself. That is the same convention the `classifications` paths follow, so
         the two line up without the caller stripping anything.
+
+        Every category carries its own `id` and its assignments, so this is also
+        the read side of editing a taxonomy: the writes below name a category by
+        the `id` reported here. Categories are listed in the order the application
+        shows them.
       responses:
         "200":
           description: The taxonomies defined in the file.
@@ -958,13 +963,31 @@ paths:
                       - id: 30314ba9-949f-4bf4-944e-6a30802f5190
                         name: Asset Allocation
                         categories:
-                          - name: Equity
+                          - id: 2b0f6b1e-2f4a-4f45-9a41-3f9e7f0f2f11
+                            name: Equity
                             color: "#89afee"
+                            weight: 0.7
                             children:
-                              - name: Europe
-                              - name: North America
-                          - name: Cash
+                              - id: 8a1c0f52-0f2e-4a4b-9d18-6b1a5c2f9c40
+                                name: Europe
+                                weight: 0.3
+                                assignments:
+                                  - type: instrument
+                                    uuid: 6a1f7bb4-1d1e-4f6e-9d02-1f6cf6f43b21
+                                    name: iShares Core MSCI Europe
+                                    weight: 1
+                              - id: 4c9a7e3d-88b7-4a2f-b0a8-2e0f5a7d1c33
+                                name: North America
+                                weight: 0.4
+                          - id: 91b3a2c7-6a5d-4c1e-8b77-0e2c8a4d5f66
+                            name: Cash
                             color: "#c4e8e8"
+                            weight: 0.3
+                            assignments:
+                              - type: cash-account
+                                uuid: 0d5f2a11-9c3b-4d7e-8f10-77a2b3c4d5e6
+                                name: CHF Cash Account
+                                weight: 1
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -2965,6 +2988,14 @@ components:
           description: The key this taxonomy appears under in a holding's `classifications`.
         name:
           type: string
+        template:
+          type: string
+          description: |
+            The id of the bundled template this taxonomy was built from
+            (`security-type`, `regions`, …), which the application records as the
+            root's classification key. **Absent for a taxonomy somebody defined
+            themselves**, and that absence is the only thing that tells a hand-built
+            scheme apart from the stock ones every file starts with.
         categories:
           type: array
           description: |
@@ -2975,18 +3006,62 @@ components:
 
     TaxonomyCategory:
       type: object
-      required: [name]
+      required: [id, name, weight]
       properties:
+        id:
+          type: string
+          description: |
+            The category's own identifier, stable across saves. This is the handle
+            every write to the tree names a category by.
         name:
           type: string
         color:
           type: string
           description: The category's display color, as set in the application.
+        note:
+          type: string
+          description: The category's note, when it has one.
+        weight:
+          type: number
+          description: |
+            The rebalancing target the application stores for this category, as a
+            fraction **of the parent category** — the categories under one parent
+            are meant to sum to 1, and the application flags it as a weight error
+            when they do not. A category created without a target takes whatever
+            its siblings leave unclaimed, so the first child of a parent is 1 and
+            the next is 0.
+        assignments:
+          type: array
+          description: |
+            The instruments and cash accounts assigned to this category. Omitted
+            when it has none, rather than reported as an empty array.
+          items:
+            $ref: "#/components/schemas/TaxonomyAssignment"
         children:
           type: array
           description: Omitted for a leaf, rather than reported as an empty array.
           items:
             $ref: "#/components/schemas/TaxonomyCategory"
+
+    TaxonomyAssignment:
+      type: object
+      description: |
+        One instrument or cash account assigned to a category. A `weight` below 1
+        is a split: the remainder sits in another category of the same taxonomy,
+        or nowhere at all. What is left over is not reported — the application
+        derives "unassigned" from the assignments rather than storing it.
+      required: [type, uuid, name, weight]
+      properties:
+        type:
+          type: string
+          enum: [instrument, cash-account]
+        uuid:
+          type: string
+        name:
+          type: string
+        weight:
+          type: number
+          description: The assigned share of the vehicle, as a fraction between 0 and 1.
 
     PriceSeries:
       type: object
