@@ -1293,6 +1293,102 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /v1/files/{file}/taxonomies/{taxonomy}/categories/{category}/assignments/{uuid}:
+    parameters:
+      - $ref: "#/components/parameters/File"
+      - $ref: "#/components/parameters/Taxonomy"
+      - $ref: "#/components/parameters/Category"
+      - $ref: "#/components/parameters/Uuid"
+    put:
+      operationId: assignToTaxonomyCategory
+      tags: [Taxonomies]
+      summary: Assign an instrument or cash account to a category
+      description: |
+        Assigns the vehicle named by `uuid` — an instrument or a cash account — to
+        the category, or changes the share already assigned there. It is the same
+        call either way, so a client can retry after a `423` without first asking
+        which of the two it is.
+
+        A vehicle can be split across the categories of one taxonomy, so `weight`
+        is a share rather than a flag. Left out, it claims everything the
+        taxonomy's other categories have not — which is what dropping a security
+        onto a category means in the application, where the remainder waits in a
+        virtual "unassigned" node. That remainder is never stored, and this API
+        does not report it: subtract the assignments from 1.
+
+        Over-assigning is refused `422` rather than clamped: a silently reduced
+        share is a wrong allocation nobody sees. The message names what is left.
+
+        The body may be omitted entirely, which is the same as `{}`.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                weight:
+                  type: number
+                  description: |
+                    The share to assign, as a fraction above 0 and at most 1.
+                    Defaults to everything the taxonomy's other categories leave.
+            examples:
+              whole:
+                summary: Assign whatever is unassigned
+                value: {}
+              split:
+                summary: Assign a third of the position here
+                value:
+                  weight: 0.3333
+      responses:
+        "200":
+          description: The updated taxonomy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Taxonomy"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+        "423":
+          $ref: "#/components/responses/Locked"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    delete:
+      operationId: unassignFromTaxonomyCategory
+      tags: [Taxonomies]
+      summary: Remove an instrument or cash account from a category
+      description: |
+        Removes the vehicle from this one category. It stays assigned wherever
+        else in the taxonomy it is: a split assignment is removed one category at
+        a time. A vehicle that is not assigned here is `404`.
+      responses:
+        "204":
+          description: Removed
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "423":
+          $ref: "#/components/responses/Locked"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /v1/files/{file}/transactions:
     parameters:
       - $ref: "#/components/parameters/File"

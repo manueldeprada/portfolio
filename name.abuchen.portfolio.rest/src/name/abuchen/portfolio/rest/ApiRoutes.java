@@ -183,6 +183,22 @@ public final class ApiRoutes
                             return Response.noContent();
                         }));
 
+        router.add("PUT", "/v1/files/{file}/taxonomies/{taxonomy}/categories/{category}/assignments/{uuid}", //$NON-NLS-1$ //$NON-NLS-2$
+                        write(resolver, host, (file, req) -> {
+                            var result = TaxonomiesHandler.assign(file.getClient(), req.pathParam("taxonomy"), //$NON-NLS-1$
+                                            req.pathParam("category"), req.pathParam("uuid"), //$NON-NLS-1$ //$NON-NLS-2$
+                                            parseOptionalObject(req));
+                            TaxonomyChangeLog.record(file.getLabel(), result.taxonomyName(), result.detail());
+                            return Response.json(200, result.entity());
+                        }));
+        router.add("DELETE", "/v1/files/{file}/taxonomies/{taxonomy}/categories/{category}/assignments/{uuid}", //$NON-NLS-1$ //$NON-NLS-2$
+                        write(resolver, host, (file, req) -> {
+                            var result = TaxonomiesHandler.unassign(file.getClient(), req.pathParam("taxonomy"), //$NON-NLS-1$
+                                            req.pathParam("category"), req.pathParam("uuid")); //$NON-NLS-1$ //$NON-NLS-2$
+                            TaxonomyChangeLog.record(file.getLabel(), result.taxonomyName(), result.detail());
+                            return Response.noContent();
+                        }));
+
         router.add("GET", "/v1/files/{file}/transactions", read(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
                         (client, req) -> Response.json(200, TransactionsHandler.list(client))));
         router.add("POST", "/v1/files/{file}/transactions", write(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
@@ -363,6 +379,16 @@ public final class ApiRoutes
         if (session == null)
             throw ApiException.notFound();
         return session;
+    }
+
+    /**
+     * The body, or an empty object when there is none - for a request whose
+     * every field has a default, where insisting on {@code &#123;&#125;} would
+     * be ceremony.
+     */
+    private static JsonObject parseOptionalObject(Request request)
+    {
+        return request.body() == null || request.body().length == 0 ? new JsonObject() : parseObject(request);
     }
 
     private static JsonObject parseObject(Request request)

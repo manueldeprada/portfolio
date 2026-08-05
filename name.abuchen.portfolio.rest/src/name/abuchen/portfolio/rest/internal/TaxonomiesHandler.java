@@ -13,8 +13,12 @@ import java.util.regex.Pattern;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 
+import name.abuchen.portfolio.model.Account;
 import name.abuchen.portfolio.model.Classification;
+import name.abuchen.portfolio.model.Classification.Assignment;
 import name.abuchen.portfolio.model.Client;
+import name.abuchen.portfolio.model.InvestmentVehicle;
+import name.abuchen.portfolio.model.Security;
 import name.abuchen.portfolio.model.Taxonomy;
 
 public final class TaxonomiesHandler
@@ -245,9 +249,143 @@ public final class TaxonomiesHandler
                         "deleted category '" + category.getName() + "'"); //$NON-NLS-1$ //$NON-NLS-2$
     }
 
+    /**
+     * Assigns an instrument or a cash account to a category, or changes the share
+     * already assigned there - the same call either way, so a client can retry
+     * one after a 423 without first asking which it is.
+     * <p>
+     * A vehicle can be split across categories of one taxonomy, so the weight is
+     * a share rather than a flag. Left out, it claims everything the taxonomy's
+     * other categories have not: that is what dropping a security onto a category
+     * means in the application, where the remainder waits in a virtual
+     * "unassigned" node. Over-assigning is refused rather than clamped, since a
+     * silently reduced share is a wrong allocation nobody sees.
+     */
+    public static Result assign(Client client, String taxonomyId, String categoryId, String vehicleUuid,
+                    JsonObject body)
+    {
+        var taxonomy = find(client, taxonomyId);
+        var category = findCategory(taxonomy, categoryId);
+        var vehicle = findVehicle(client, vehicleUuid);
+
+        var errors = new ArrayList<ApiException.FieldError>();
+        rejectUnknownFields(body, Set.of("weight"), errors); //$NON-NLS-1$
+        var requested = fraction(body, "weight", errors); //$NON-NLS-1$
+
+        if (!errors.isEmpty())
+            throw ApiException.validation(errors);
+
+        var existing = assignmentOf(category, vehicle);
+        var elsewhere = assignedWeight(taxonomy, vehicle) - (existing == null ? 0 : existing.getWeight());
+        var available = Classification.ONE_HUNDRED_PERCENT - elsewhere;
+
+        var weight = requested != null ? requested.intValue() : available;
+
+        if (weight <= 0 || weight > available)
+        {
+            throw ApiException.validation(List.of(new ApiException.FieldError("weight", "invalid-range", //$NON-NLS-1$ //$NON-NLS-2$
+                            available <= 0 ? vehicle.getName() + " is already fully assigned in this taxonomy" //$NON-NLS-1$
+                                            : "weight must be above 0 and at most " //$NON-NLS-1$
+                                                            + fractionOf(available) + ", what this taxonomy's " //$NON-NLS-1$
+                                                            + "other categories leave for " + vehicle.getName()))); //$NON-NLS-1$
+        }
+
+        if (existing != null)
+        {
+            if (existing.getWeight() == weight)
+                return new Result(EntityJson.toJson(taxonomy), taxonomy.getName(), null);
+
+            existing.setWeight(weight);
+        }
+        else
+        {
+            var assignment = new Assignment(vehicle, weight);
+            assignment.setRank(category.getAssignments().size());
+            category.addAssignment(assignment);
+        }
+
+        client.markDirty();
+
+        return new Result(EntityJson.toJson(taxonomy), taxonomy.getName(),
+                        "assigned '" + vehicle.getName() + "' to category '" + category.getName() + "'"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
+    /**
+     * Removes the vehicle from that one category. It stays assigned wherever else
+     * in the taxonomy it is - a split assignment is removed one category at a
+     * time, which is also what makes the call idempotent per category.
+     */
+    public static Result unassign(Client client, String taxonomyId, String categoryId, String vehicleUuid)
+    {
+        var taxonomy = find(client, taxonomyId);
+        var category = findCategory(taxonomy, categoryId);
+        var vehicle = findVehicle(client, vehicleUuid);
+
+        var assignment = assignmentOf(category, vehicle);
+        if (assignment == null)
+            throw ApiException.notFound();
+
+        category.removeAssignment(assignment);
+        client.markDirty();
+
+        return new Result(EntityJson.toJson(taxonomy), taxonomy.getName(),
+                        "removed '" + vehicle.getName() + "' from category '" + category.getName() + "'"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+    }
+
     /* package */ static Taxonomy find(Client client, String taxonomyId)
     {
         return Entities.byUuid(client.getTaxonomies(), Taxonomy::getId, taxonomyId);
+    }
+
+    /**
+     * An instrument or a cash account by its uuid. Investment accounts are
+     * deliberately not searched: the model classifies the vehicles that hold
+     * value, and a portfolio's value is its instruments'.
+     */
+    private static InvestmentVehicle findVehicle(Client client, String uuid)
+    {
+        for (Security security : client.getSecurities())
+        {
+            if (security.getUUID().equals(uuid))
+                return security;
+        }
+
+        for (Account account : client.getAccounts())
+        {
+            if (account.getUUID().equals(uuid))
+                return account;
+        }
+
+        throw ApiException.notFound();
+    }
+
+    private static Assignment assignmentOf(Classification category, InvestmentVehicle vehicle)
+    {
+        return category.getAssignments().stream() //
+                        .filter(assignment -> vehicle.equals(assignment.getInvestmentVehicle())) //
+                        .findFirst().orElse(null);
+    }
+
+    /** what the whole taxonomy already assigns of one vehicle */
+    private static int assignedWeight(Taxonomy taxonomy, InvestmentVehicle vehicle)
+    {
+        var total = new int[1];
+        taxonomy.foreach(new Taxonomy.Visitor()
+        {
+            @Override
+            public void visit(Classification classification, Assignment assignment)
+            {
+                if (vehicle.equals(assignment.getInvestmentVehicle()))
+                    total[0] += assignment.getWeight();
+            }
+        });
+        return total[0];
+    }
+
+    private static String fractionOf(int weight)
+    {
+        return BigDecimal.valueOf(weight).divide(BigDecimal.valueOf(Classification.ONE_HUNDRED_PERCENT))
+                        .stripTrailingZeros().toPlainString();
     }
 
     /**
