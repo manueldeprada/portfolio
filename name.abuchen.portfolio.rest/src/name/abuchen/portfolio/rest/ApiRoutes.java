@@ -160,6 +160,29 @@ public final class ApiRoutes
                             return Response.noContent();
                         }));
 
+        router.add("POST", "/v1/files/{file}/taxonomies/{taxonomy}/categories", write(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
+                        (file, req) -> {
+                            var result = TaxonomiesHandler.addCategory(file.getClient(),
+                                            req.pathParam("taxonomy"), parseObject(req)); //$NON-NLS-1$
+                            TaxonomyChangeLog.record(file.getLabel(), result.taxonomyName(), result.detail());
+                            return Response.json(201, result.entity());
+                        }));
+        router.add("PATCH", "/v1/files/{file}/taxonomies/{taxonomy}/categories/{category}", write(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
+                        (file, req) -> {
+                            var result = TaxonomiesHandler.patchCategory(file.getClient(),
+                                            req.pathParam("taxonomy"), req.pathParam("category"), //$NON-NLS-1$ //$NON-NLS-2$
+                                            parseObject(req));
+                            TaxonomyChangeLog.record(file.getLabel(), result.taxonomyName(), result.detail());
+                            return Response.json(200, result.entity());
+                        }));
+        router.add("DELETE", "/v1/files/{file}/taxonomies/{taxonomy}/categories/{category}", write(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
+                        (file, req) -> {
+                            var result = TaxonomiesHandler.deleteCategory(file.getClient(),
+                                            req.pathParam("taxonomy"), req.pathParam("category")); //$NON-NLS-1$ //$NON-NLS-2$
+                            TaxonomyChangeLog.record(file.getLabel(), result.taxonomyName(), result.detail());
+                            return Response.noContent();
+                        }));
+
         router.add("GET", "/v1/files/{file}/transactions", read(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
                         (client, req) -> Response.json(200, TransactionsHandler.list(client))));
         router.add("POST", "/v1/files/{file}/transactions", write(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$

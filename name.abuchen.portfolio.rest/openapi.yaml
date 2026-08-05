@@ -1151,6 +1151,148 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /v1/files/{file}/taxonomies/{taxonomy}/categories:
+    parameters:
+      - $ref: "#/components/parameters/File"
+      - $ref: "#/components/parameters/Taxonomy"
+    post:
+      operationId: createTaxonomyCategory
+      tags: [Taxonomies]
+      summary: Add a category to a taxonomy
+      description: |
+        Adds one category. It goes last among its siblings unless `position` says
+        otherwise, and takes whatever target weight its siblings leave unclaimed —
+        which is what the application's own "add category" does, so the first child
+        of a parent starts at 1 and the next at 0.
+
+        Returns the whole taxonomy, not just the new category: a client editing a
+        tree needs the tree.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TaxonomyCategoryWrite"
+            examples:
+              topLevel:
+                summary: A new top-level category
+                value:
+                  name: Emerging Markets
+              child:
+                summary: A child of an existing category, with a target weight
+                value:
+                  name: China
+                  parent: 92c627d7-c26b-4316-9bfd-2dd57bfd62f6
+                  color: "#d42c40"
+                  weight: 0.25
+      responses:
+        "201":
+          description: The taxonomy, including the new category.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Taxonomy"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+        "423":
+          $ref: "#/components/responses/Locked"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/files/{file}/taxonomies/{taxonomy}/categories/{category}:
+    parameters:
+      - $ref: "#/components/parameters/File"
+      - $ref: "#/components/parameters/Taxonomy"
+      - $ref: "#/components/parameters/Category"
+    patch:
+      operationId: patchTaxonomyCategory
+      tags: [Taxonomies]
+      summary: Rename, recolor, reweight, move or reorder a category
+      description: |
+        A **JSON Merge Patch** (RFC 7386): fields you omit stay untouched, and an
+        explicit `null` clears an optional one.
+
+        `parent` moves the category with its whole subtree; `null` moves it to the
+        top level, the root being the taxonomy rather than a category. Moving a
+        category into itself or into one of its own children is rejected `422`
+        rather than clamped — it would detach that subtree from the tree.
+
+        `position` is the index among the siblings it ends up with, clamped to the
+        end of the list.
+      requestBody:
+        required: true
+        content:
+          application/merge-patch+json:
+            schema:
+              $ref: "#/components/schemas/TaxonomyCategoryWrite"
+            examples:
+              rename:
+                value:
+                  name: Developed Markets
+              move:
+                summary: Move to the top level, first
+                value:
+                  parent: null
+                  position: 0
+      responses:
+        "200":
+          description: The updated taxonomy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Taxonomy"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+        "423":
+          $ref: "#/components/responses/Locked"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    delete:
+      operationId: deleteTaxonomyCategory
+      tags: [Taxonomies]
+      summary: Delete a category and everything below it
+      description: |
+        The instruments and cash accounts it classified are not touched — they
+        simply stop being classified in this taxonomy, exactly as in the
+        application.
+      responses:
+        "204":
+          description: Deleted
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "423":
+          $ref: "#/components/responses/Locked"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /v1/files/{file}/transactions:
     parameters:
       - $ref: "#/components/parameters/File"
@@ -2612,6 +2754,16 @@ components:
       schema:
         type: string
 
+    Category:
+      name: category
+      in: path
+      required: true
+      description: |
+        The `id` of a category within the taxonomy. The taxonomy's root is not
+        addressable — it names the taxonomy, not a category.
+      schema:
+        type: string
+
   schemas:
     TradesResponse:
       type: object
@@ -3200,6 +3352,40 @@ components:
           description: Omitted for a leaf, rather than reported as an empty array.
           items:
             $ref: "#/components/schemas/TaxonomyCategory"
+
+    TaxonomyCategoryWrite:
+      type: object
+      description: |
+        The writable facets of a category. `name` is required when creating one;
+        everything else takes a default. Any other field is rejected `422` rather
+        than silently ignored — a typo must not look like success.
+      properties:
+        name:
+          type: string
+        parent:
+          type: string
+          nullable: true
+          description: |
+            The id of the category this one sits under. Absent or `null` means the
+            top level: the root is the taxonomy, not a category.
+        color:
+          type: string
+          description: A hex triplet such as `#89afee`.
+        note:
+          type: string
+          nullable: true
+        weight:
+          type: number
+          description: |
+            The rebalancing target, as a fraction of the parent category. Out of
+            range is refused rather than clamped, so a client that meant `40`
+            instead of `0.4` hears about it.
+        position:
+          type: integer
+          minimum: 0
+          description: |
+            The index among the siblings, clamped to the end of the list. Absent
+            means last when creating, and unchanged when patching.
 
     TaxonomyAssignment:
       type: object
