@@ -22,9 +22,11 @@ import name.abuchen.portfolio.rest.Messages;
 @SuppressWarnings("nls")
 public class ChangeLogMessagesWellFormedTest
 {
-    // keys InstrumentChangeLog feeds through MessageFormat.format as PATTERNS,
-    // each taking two arguments (instrument name, file label)
-    private static final String[] PATTERN_KEYS = { "MsgApiInstrumentChanged", "MsgApiInstrumentDeleted" };
+    // keys InstrumentChangeLog and TaxonomyChangeLog feed through
+    // MessageFormat.format as PATTERNS, each taking two arguments (the entity's
+    // name, the file label)
+    private static final String[] PATTERN_KEYS = { "MsgApiInstrumentChanged", "MsgApiInstrumentDeleted",
+                    "MsgApiTaxonomyChanged", "MsgApiTaxonomyCreated", "MsgApiTaxonomyDeleted" };
 
     // keys FileAccessRegistry feeds through MessageFormat.format as PATTERNS,
     // each taking one argument (the offending alias)

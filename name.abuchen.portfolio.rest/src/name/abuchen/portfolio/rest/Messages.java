@@ -9,6 +9,9 @@ public class Messages extends NLS
     public static String MsgApiInstrumentChanged;
     public static String MsgApiInstrumentDeleted;
     public static String MsgApiInstrumentFieldChanged;
+    public static String MsgApiTaxonomyChanged;
+    public static String MsgApiTaxonomyCreated;
+    public static String MsgApiTaxonomyDeleted;
     public static String MsgApiTransactionCreated;
     public static String MsgApiTransactionDeleted;
     public static String MsgApiValueUnset;

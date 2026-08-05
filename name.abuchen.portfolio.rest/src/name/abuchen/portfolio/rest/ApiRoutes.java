@@ -30,6 +30,7 @@ import name.abuchen.portfolio.rest.internal.SecuritiesHandler;
 import name.abuchen.portfolio.rest.internal.SecurityPerformanceHandler;
 import name.abuchen.portfolio.rest.internal.SecurityPricesHandler;
 import name.abuchen.portfolio.rest.internal.TaxonomiesHandler;
+import name.abuchen.portfolio.rest.internal.TaxonomyChangeLog;
 import name.abuchen.portfolio.rest.internal.TradesHandler;
 import name.abuchen.portfolio.rest.internal.VersionHandler;
 import name.abuchen.portfolio.rest.internal.mcp.McpEndpoint;
@@ -135,6 +136,29 @@ public final class ApiRoutes
 
         router.add("GET", "/v1/files/{file}/taxonomies", read(resolver, host,
                         (client, req) -> Response.json(200, TaxonomiesHandler.list(client))));
+        router.add("POST", "/v1/files/{file}/taxonomies", write(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
+                        (file, req) -> {
+                            var result = TaxonomiesHandler.create(file.getClient(), parseObject(req));
+                            TaxonomyChangeLog.recordCreation(file.getLabel(), result.taxonomyName());
+                            return Response.created("/v1/files/" + req.pathParam("file") + "/taxonomies/" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                                            + result.entity().get("id").getAsString(), result.entity()); //$NON-NLS-1$
+                        }));
+        router.add("GET", "/v1/files/{file}/taxonomies/{taxonomy}", read(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
+                        (client, req) -> Response.json(200,
+                                        TaxonomiesHandler.get(client, req.pathParam("taxonomy"))))); //$NON-NLS-1$
+        router.add("PATCH", "/v1/files/{file}/taxonomies/{taxonomy}", write(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
+                        (file, req) -> {
+                            var result = TaxonomiesHandler.patch(file.getClient(), req.pathParam("taxonomy"), //$NON-NLS-1$
+                                            parseObject(req));
+                            TaxonomyChangeLog.record(file.getLabel(), result.taxonomyName(), result.detail());
+                            return Response.json(200, result.entity());
+                        }));
+        router.add("DELETE", "/v1/files/{file}/taxonomies/{taxonomy}", write(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
+                        (file, req) -> {
+                            var name = TaxonomiesHandler.delete(file.getClient(), req.pathParam("taxonomy")); //$NON-NLS-1$
+                            TaxonomyChangeLog.recordDeletion(file.getLabel(), name);
+                            return Response.noContent();
+                        }));
 
         router.add("GET", "/v1/files/{file}/transactions", read(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
                         (client, req) -> Response.json(200, TransactionsHandler.list(client))));

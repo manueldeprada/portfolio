@@ -1000,6 +1000,156 @@ paths:
           $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
+    post:
+      operationId: createTaxonomy
+      tags: [Taxonomies]
+      summary: Create an empty taxonomy
+      description: |
+        Creates a taxonomy with no categories, exactly as the application's own
+        "new taxonomy" does. Categories are added one at a time afterwards.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+            examples:
+              default:
+                value:
+                  name: Regions
+      responses:
+        "201":
+          description: The created taxonomy.
+          headers:
+            Location:
+              description: The URL of the created taxonomy.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Taxonomy"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+        "423":
+          $ref: "#/components/responses/Locked"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/files/{file}/taxonomies/{taxonomy}:
+    parameters:
+      - $ref: "#/components/parameters/File"
+      - $ref: "#/components/parameters/Taxonomy"
+    get:
+      operationId: getTaxonomy
+      tags: [Taxonomies]
+      summary: Read one taxonomy and its category tree
+      responses:
+        "200":
+          description: The taxonomy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Taxonomy"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    patch:
+      operationId: patchTaxonomy
+      tags: [Taxonomies]
+      summary: Rename a taxonomy
+      description: |
+        A **JSON Merge Patch** (RFC 7386): fields you omit stay untouched. Only
+        `name` is writable; anything else is rejected `422` rather than silently
+        ignored.
+
+        The root classification is renamed with it. The root *is* the taxonomy —
+        it is never reported as a category — so letting the two names drift would
+        leave a tree whose root disagrees with the taxonomy above it.
+      requestBody:
+        required: true
+        content:
+          application/merge-patch+json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+            examples:
+              rename:
+                value:
+                  name: Asset Classes
+      responses:
+        "200":
+          description: The updated taxonomy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Taxonomy"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+        "423":
+          $ref: "#/components/responses/Locked"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    delete:
+      operationId: deleteTaxonomy
+      tags: [Taxonomies]
+      summary: Delete a taxonomy and all of its categories
+      description: |
+        Nothing blocks this. A taxonomy holds no data of its own — only a
+        classification of instruments and cash accounts that go on existing
+        without it, which is why the application does not ask either.
+      responses:
+        "204":
+          description: Deleted
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "423":
+          $ref: "#/components/responses/Locked"
+        "500":
+          $ref: "#/components/responses/InternalError"
 
   /v1/files/{file}/transactions:
     parameters:
@@ -2453,6 +2603,14 @@ components:
         type: string
         enum: [included, excluded]
         default: included
+
+    Taxonomy:
+      name: taxonomy
+      in: path
+      required: true
+      description: The `id` of the taxonomy, as reported by the taxonomy list
+      schema:
+        type: string
 
   schemas:
     TradesResponse:
