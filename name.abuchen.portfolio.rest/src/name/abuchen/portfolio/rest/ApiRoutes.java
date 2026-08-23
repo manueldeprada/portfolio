@@ -226,8 +226,13 @@ public final class ApiRoutes
         router.add("POST", "/v1/files/{file}/imports", write(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
                         (file, req) -> Response.json(201, ImportsHandler.extract(file.getClient(),
                                         file.getPath(), req.queryParam("filename"), req.body(), //$NON-NLS-1$
-                                        req.queryParam("config")))), //$NON-NLS-1$
-                        "filename", "config"); //$NON-NLS-1$ //$NON-NLS-2$
+                                        req.queryParam("config"), req.queryParam("mapping"), //$NON-NLS-1$ //$NON-NLS-2$
+                                        "true".equals(req.queryParam("save"))))), //$NON-NLS-1$ //$NON-NLS-2$
+                        "filename", "config", "mapping", "save"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+        router.add("POST", "/v1/files/{file}/imports/csv-preview", write(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
+                        (file, req) -> Response.json(200, ImportsHandler.previewCsv(file.getClient(),
+                                        req.queryParam("filename"), req.body()))), //$NON-NLS-1$
+                        "filename"); //$NON-NLS-1$
         router.add("GET", "/v1/files/{file}/imports/configs", onUiThread(host, req -> { //$NON-NLS-1$ //$NON-NLS-2$
             resolver.resolve(req.pathParam("file")); //$NON-NLS-1$
             return Response.json(200, ImportsHandler.configs());

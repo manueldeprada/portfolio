@@ -5,8 +5,10 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Scanner;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
@@ -23,16 +25,27 @@ import name.abuchen.portfolio.datatransfer.csv.CSVConfigManager;
  * e4-injected singleton (its user-specific configurations live in
  * {@code IEclipsePreferences} handed to it by dependency injection), which a
  * headless REST call has no context to obtain. Rather than reimplement that
- * injection here, this class reads the identical bundled resource directly -
- * only the built-in configurations are exposed over the API. A user-specific
- * configuration created in the desktop wizard is not visible here; that is the
- * one thing "saved configs" does not yet mean over the API, and is worth
- * revisiting only if a caller actually needs a custom mapping saved from a
- * script rather than from the desktop.
+ * injection here, this class reads the identical bundled resource directly for
+ * the built-in list.
+ * <p>
+ * A configuration built over the API (an inline {@code mapping} on
+ * {@code POST .../imports}, saved with {@code save=true}) is kept in a second,
+ * in-memory store instead: there is no {@code IEclipsePreferences} to write it
+ * into headless, and no other durable location this bundle can reach without
+ * knowing about a particular deployment's file layout (the headless daemon's
+ * workspace, for instance, is a concept this bundle does not have). It is
+ * therefore process-lifetime only - it does not survive a restart, and it is
+ * not shared between REST server instances - documented here rather than
+ * silently discovered the first time a saved mapping disappears. A label
+ * saved this way shadows a built-in one of the same name for {@link #byLabel}
+ * and {@link #all}, on the reasoning that a caller who named their own
+ * mapping "SECURITIES" meant their own.
  */
 final class CSVConfigs
 {
     private static List<CSVConfig> builtIn;
+
+    private static final Map<String, CSVConfig> CUSTOM = new ConcurrentHashMap<>();
 
     private CSVConfigs()
     {
@@ -45,9 +58,29 @@ final class CSVConfigs
         return builtIn;
     }
 
+    /** Built-in configurations first, then the custom ones saved over the API. */
+    static List<CSVConfig> all()
+    {
+        var answer = new ArrayList<CSVConfig>();
+        for (var config : builtIn())
+            if (!CUSTOM.containsKey(config.getLabel()))
+                answer.add(config);
+        answer.addAll(CUSTOM.values());
+        return answer;
+    }
+
     static Optional<CSVConfig> byLabel(String label)
     {
+        var custom = CUSTOM.get(label);
+        if (custom != null)
+            return Optional.of(custom);
         return builtIn().stream().filter(c -> c.getLabel().equals(label)).findAny();
+    }
+
+    /** Keeps a mapping built from an inline {@code mapping} for later reuse by label. */
+    static void save(CSVConfig config)
+    {
+        CUSTOM.put(config.getLabel(), config);
     }
 
     private static List<CSVConfig> load()

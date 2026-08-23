@@ -390,4 +390,193 @@ public class ImportsTest
         assertThat(preview.getAsJsonArray("items").size(), is(0));
         assertThat(JsonParser.parseString(preview.toString()).getAsJsonObject().has("errors"), is(true));
     }
+
+    private static final String SECURITIES_CSV = "Stück/Nom.;Bezeichnung;WKN;Typ;Währung;Akt. Kurs\n"
+                    + "10;APPLE INC;865985;Aktie;USD;100,00\n";
+
+    @Test
+    public void testCsvPreviewReportsColumnsSampleRowsAndTargetFields()
+    {
+        var client = fixture();
+
+        var preview = ImportsHandler.previewCsv(client, "depot.csv", SECURITIES_CSV.getBytes(StandardCharsets.UTF_8));
+
+        var columns = preview.getAsJsonArray("columns");
+        assertThat(columns.size(), is(6));
+        assertThat(columns.get(0).getAsJsonObject().get("index").getAsInt(), is(0));
+        assertThat(columns.get(1).getAsJsonObject().get("label").getAsString(), is("Bezeichnung"));
+
+        var sampleRows = preview.getAsJsonArray("sampleRows");
+        assertThat(sampleRows.size(), is(1));
+        assertThat(sampleRows.get(0).getAsJsonArray().get(1).getAsString(), is("APPLE INC"));
+
+        var targets = preview.getAsJsonArray("targets");
+        assertThat(targets.size(), greaterThan(0));
+
+        var codes = new ArrayList<String>();
+        for (var element : targets)
+            codes.add(element.getAsJsonObject().get("target").getAsString());
+        assertThat(codes, hasItem("portfolio"));
+
+        for (var element : targets)
+        {
+            var target = element.getAsJsonObject();
+            var fields = target.getAsJsonArray("fields");
+            assertThat(fields.size(), greaterThan(0));
+
+            var field = fields.get(0).getAsJsonObject();
+            assertThat(field.get("code").getAsString().isBlank(), is(false));
+            assertThat(field.get("name").getAsString().isBlank(), is(false));
+            assertThat(field.has("optional"), is(true));
+            assertThat(field.has("formats"), is(true));
+        }
+    }
+
+    @Test
+    public void testCsvPreviewRejectsANonCsvFilename()
+    {
+        var client = fixture();
+
+        try
+        {
+            ImportsHandler.previewCsv(client, "statement.pdf", "a,b,c".getBytes(StandardCharsets.UTF_8));
+            Assert.fail("expected a validation error");
+        }
+        catch (ApiException e)
+        {
+            assertThat(e.getStatus(), is(422));
+            assertThat(e.getErrors().get(0).field(), is("filename"));
+        }
+    }
+
+    @Test
+    public void testACsvUploadWithNeitherConfigNorMappingIsRejected()
+    {
+        var client = fixture();
+
+        try
+        {
+            ImportsHandler.extract(client, "/tmp/test.portfolio", "statement.csv",
+                            "a,b,c".getBytes(StandardCharsets.UTF_8), null, null, false);
+            Assert.fail("expected a validation error");
+        }
+        catch (ApiException e)
+        {
+            assertThat(e.getStatus(), is(422));
+            assertThat(e.getErrors().get(0).field(), is("config"));
+            assertThat(e.getErrors().get(0).code(), is("required"));
+        }
+    }
+
+    @Test
+    public void testACsvUploadWithBothConfigAndMappingIsRejected()
+    {
+        var client = fixture();
+
+        try
+        {
+            ImportsHandler.extract(client, "/tmp/test.portfolio", "statement.csv",
+                            "a,b,c".getBytes(StandardCharsets.UTF_8), "SECURITIES", "{}", false);
+            Assert.fail("expected a validation error");
+        }
+        catch (ApiException e)
+        {
+            assertThat(e.getStatus(), is(422));
+            assertThat(e.getErrors().get(0).field(), is("mapping"));
+            assertThat(e.getErrors().get(0).code(), is("conflicting-value"));
+        }
+    }
+
+    @Test
+    public void testACsvUploadWithAnInvalidMappingIsRejected()
+    {
+        var client = fixture();
+
+        try
+        {
+            ImportsHandler.extract(client, "/tmp/test.portfolio", "statement.csv",
+                            "a,b,c".getBytes(StandardCharsets.UTF_8), null, "not json", false);
+            Assert.fail("expected a validation error");
+        }
+        catch (ApiException e)
+        {
+            assertThat(e.getStatus(), is(422));
+            assertThat(e.getErrors().get(0).field(), is("mapping"));
+        }
+    }
+
+    @Test
+    public void testACsvUploadWithAnInlineMappingExtractsItemsAndCanBeSavedForReuse()
+    {
+        var client = fixture();
+
+        var mapping = """
+                        {
+                          "label": "My Depot Mapping",
+                          "target": "portfolio",
+                          "delimiter": ";",
+                          "encoding": "UTF-8",
+                          "skipLines": 0,
+                          "isFirstLineHeader": true,
+                          "columns": [
+                            {"label": "Stück/Nom.", "field": "shares"},
+                            {"label": "Bezeichnung", "field": "name"},
+                            {"label": "WKN", "field": "wkn"},
+                            {"label": "Typ"},
+                            {"label": "Währung", "field": "currency"},
+                            {"label": "Akt. Kurs", "field": "quote"}
+                          ]
+                        }
+                        """;
+
+        var preview = ImportsHandler.extract(client, "/tmp/test.portfolio", "depot.csv",
+                        SECURITIES_CSV.getBytes(StandardCharsets.UTF_8), null, mapping, true);
+
+        assertThat(preview.get("id").getAsString(), notNullValue());
+        assertThat(preview.has("items"), is(true));
+
+        // saved: now visible by label, both to the config list and to a later
+        // extraction naming it with `config` rather than `mapping`
+        var labels = new ArrayList<String>();
+        for (var element : ImportsHandler.configs())
+            labels.add(element.getAsJsonObject().get("label").getAsString());
+        assertThat(labels, hasItem("My Depot Mapping"));
+
+        var reused = ImportsHandler.extract(client, "/tmp/test.portfolio", "depot2.csv",
+                        SECURITIES_CSV.getBytes(StandardCharsets.UTF_8), "My Depot Mapping");
+        assertThat(reused.has("items"), is(true));
+    }
+
+    @Test
+    public void testAnUnsavedInlineMappingIsNotListedAfterwards()
+    {
+        var client = fixture();
+
+        var mapping = """
+                        {
+                          "label": "Throwaway Mapping",
+                          "target": "portfolio",
+                          "delimiter": ";",
+                          "encoding": "UTF-8",
+                          "skipLines": 0,
+                          "isFirstLineHeader": true,
+                          "columns": [
+                            {"label": "Stück/Nom.", "field": "shares"},
+                            {"label": "Bezeichnung", "field": "name"},
+                            {"label": "WKN", "field": "wkn"},
+                            {"label": "Typ"},
+                            {"label": "Währung", "field": "currency"},
+                            {"label": "Akt. Kurs", "field": "quote"}
+                          ]
+                        }
+                        """;
+
+        ImportsHandler.extract(client, "/tmp/test.portfolio", "depot.csv",
+                        SECURITIES_CSV.getBytes(StandardCharsets.UTF_8), null, mapping, false);
+
+        var labels = new ArrayList<String>();
+        for (var element : ImportsHandler.configs())
+            labels.add(element.getAsJsonObject().get("label").getAsString());
+        assertThat(labels, org.hamcrest.Matchers.not(hasItem("Throwaway Mapping")));
+    }
 }

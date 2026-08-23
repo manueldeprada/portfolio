@@ -1638,12 +1638,24 @@ paths:
         The body is the file itself, not a multipart form: the API takes one
         file per import, and the content type is whatever the file is.
 
-        A `.csv` upload additionally requires the `config` query parameter,
-        naming one of the saved configurations `GET .../imports/configs`
-        lists — a CSV has no format of its own to auto-detect, so the column
-        mapping has to be named rather than guessed. Only the bundled
-        configurations can be named today; a configuration saved from the
-        desktop wizard is not yet visible over the API.
+        A `.csv` upload has no format of its own to auto-detect, so the
+        column mapping has to be named rather than guessed — one of `config`
+        or `mapping` is required (naming both is rejected). `config` names one
+        of the saved configurations `GET .../imports/configs` lists. `mapping`
+        instead supplies one inline, as the JSON object `POST
+        .../imports/csv-preview` is built to feed: `label`, `target`
+        (the extractor code — see `listImportConfigs`), `delimiter`,
+        `encoding`, `skipLines`, `isFirstLineHeader`, and `columns` — one
+        entry per column of the file, in file order, each an object with
+        `label` (the header text; cosmetic, kept for round-tripping) and
+        optional `field` (a code from the matching target's `fields` in the
+        preview) and `format` (a code from that field's `formats`); a column
+        with no `field` is left unmapped. Add `save=true` to keep it under its
+        own `label` for later reuse by `config` — kept in memory for the
+        life of the server process, not written to a file, so it does not
+        survive a restart and is not shared between server instances; a
+        configuration saved from the desktop wizard is separate and still not
+        visible over the API.
 
         Sessions live in memory for 30 minutes and die with the application. A
         lost session costs a re-upload, which is why nothing is written until
@@ -1663,9 +1675,28 @@ paths:
           description: |
             The saved CSV configuration to read the file with, by its `label`
             (`GET .../imports/configs` lists the available ones). Required for
-            a `.csv` upload; ignored otherwise.
+            a `.csv` upload unless `mapping` is given instead; ignored for a
+            `.pdf` or `.xml` upload.
           schema:
             type: string
+        - name: mapping
+          in: query
+          required: false
+          description: |
+            An inline column mapping for a `.csv` upload, as JSON — see this
+            operation's description for the shape. An alternative to `config`;
+            naming both is rejected.
+          schema:
+            type: string
+        - name: save
+          in: query
+          required: false
+          description: |
+            When `true` together with `mapping`, keeps the mapping under its
+            own `label` so a later `config` can name it. Ignored otherwise.
+          schema:
+            type: boolean
+            default: false
       requestBody:
         required: true
         content:
@@ -1705,6 +1736,117 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /v1/files/{file}/imports/csv-preview:
+    parameters:
+      - $ref: "#/components/parameters/File"
+    post:
+      operationId: previewCsvColumns
+      tags: [Imports]
+      summary: Preview a CSV file's columns, for building a mapping
+      description: |
+        Reads only the header row and up to five sample data rows of the
+        uploaded `.csv` file, plus the fields every CSV target extractor
+        (`account-transaction`, `portfolio-transaction`, `investment-vehicle`,
+        `investment-vehicle-price`, `portfolio`) knows how to fill — enough
+        for a client to render a column-mapping UI without committing to one.
+        Nothing is written or kept: unlike `createImport`, there is no session
+        here, because a preview a caller has not yet mapped is not something
+        review or apply could act on.
+
+        Read with the importer's own defaults (a locale-dependent delimiter,
+        the platform's default encoding, first line as header) — a file that
+        needs different ones still previews, just with columns split on the
+        wrong character; build the mapping against what `createImport` will
+        actually see once posted with the real `delimiter`/`encoding`/
+        `skipLines` in the same JSON.
+
+        Each field's `formats` lists the format codes `createImport`'s
+        `mapping.columns[].format` accepts for that field (a date field's
+        available patterns, an amount field's decimal-separator convention);
+        omitting `format` lets the importer guess one from the column's first
+        non-empty value, exactly as the desktop wizard's live preview does.
+      parameters:
+        - name: filename
+          in: query
+          required: true
+          description: The name of the uploaded file; must end in `.csv`.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          text/csv:
+            schema:
+              type: string
+              format: binary
+      responses:
+        "200":
+          description: The parsed columns, sample rows and available target fields.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [columns, sampleRows, targets]
+                properties:
+                  columns:
+                    type: array
+                    items:
+                      type: object
+                      required: [index, label]
+                      properties:
+                        index:
+                          type: integer
+                        label:
+                          type: string
+                  sampleRows:
+                    type: array
+                    items:
+                      type: array
+                      items:
+                        type: string
+                  targets:
+                    type: array
+                    items:
+                      type: object
+                      required: [target, fields]
+                      properties:
+                        target:
+                          type: string
+                          enum:
+                            - account-transaction
+                            - portfolio-transaction
+                            - investment-vehicle
+                            - investment-vehicle-price
+                            - portfolio
+                        fields:
+                          type: array
+                          items:
+                            type: object
+                            required: [code, name, optional, formats]
+                            properties:
+                              code:
+                                type: string
+                              name:
+                                type: string
+                              optional:
+                                type: boolean
+                              formats:
+                                type: array
+                                items:
+                                  type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /v1/files/{file}/imports/configs:
     parameters:
       - $ref: "#/components/parameters/File"
@@ -1716,8 +1858,10 @@ paths:
         The configurations a `.csv` upload's `config` parameter may name, each
         naming the extractor it feeds (`account-transaction`,
         `portfolio-transaction`, `investment-vehicle`,
-        `investment-vehicle-price` or `portfolio`). Only the ones bundled with
-        the application are listed; see `createImport`'s description.
+        `investment-vehicle-price` or `portfolio`). Includes both the
+        configurations bundled with the application and any saved with
+        `save=true` on a `createImport` `mapping`; see `createImport`'s
+        description for both.
       responses:
         "200":
           description: The available configurations.
@@ -5026,6 +5170,7 @@ components:
             - unknown-parameter
             - duplicate-parameter
             - unknown-reference
+            - conflicting-value
             - unknown-currency
             - currency-mismatch
             - not-applicable

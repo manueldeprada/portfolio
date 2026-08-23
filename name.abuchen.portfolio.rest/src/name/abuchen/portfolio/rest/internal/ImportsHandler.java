@@ -12,6 +12,9 @@ import java.util.Locale;
 import java.util.Map;
 
 import org.eclipse.core.runtime.NullProgressMonitor;
+import org.json.simple.JSONObject;
+import org.json.simple.JSONValue;
+import org.json.simple.parser.ParseException;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -29,6 +32,7 @@ import name.abuchen.portfolio.datatransfer.actions.DetectDuplicatesAction;
 import name.abuchen.portfolio.datatransfer.actions.InsertAction;
 import name.abuchen.portfolio.datatransfer.csv.CSVConfig;
 import name.abuchen.portfolio.datatransfer.csv.CSVImporter;
+import name.abuchen.portfolio.datatransfer.csv.CSVImporter.Field;
 import name.abuchen.portfolio.datatransfer.ibflex.IBFlexStatementExtractor;
 import name.abuchen.portfolio.datatransfer.pdf.PDFImportAssistant;
 import name.abuchen.portfolio.model.Account;
@@ -88,13 +92,14 @@ public final class ImportsHandler
      * {@code portfolio-transaction}, {@code investment-vehicle},
      * {@code investment-vehicle-price} or {@code portfolio} - the same codes
      * {@link name.abuchen.portfolio.datatransfer.csv.CSVExtractor#getCode()}
-     * returns). Only the bundled configurations are listed; see
-     * {@link CSVConfigs} for why a desktop-saved custom one is not.
+     * returns). Includes both the bundled configurations and any saved with
+     * {@code save=true} on a {@code mapping} upload; see {@link CSVConfigs}
+     * for why a desktop-saved custom one is still not included.
      */
     public static JsonArray configs()
     {
         var array = new JsonArray();
-        for (var config : CSVConfigs.builtIn())
+        for (var config : CSVConfigs.all())
         {
             var json = new JsonObject();
             json.addProperty("label", config.getLabel());
@@ -105,6 +110,106 @@ public final class ImportsHandler
     }
 
     /**
+     * The header row, a handful of sample data rows, and the fields every CSV
+     * target extractor knows how to fill - everything a client needs to render
+     * an interactive column-mapping UI before it commits to a {@code mapping}
+     * on {@code POST .../imports}. Read with the importer's default delimiter,
+     * encoding and header assumptions (a comma-or-semicolon-per-locale
+     * delimiter, the platform default encoding, first line as header): a file
+     * that needs different ones still previews - the columns are then labeled
+     * with whatever the wrong delimiter produced - but its mapping should be
+     * built against the fields it will actually reach after posting to
+     * {@code .../imports} with those settings named explicitly.
+     */
+    public static JsonObject previewCsv(Client client, String fileName, byte[] content)
+    {
+        if (fileName == null || fileName.isBlank())
+            throw ApiException.badRequest("the filename query parameter names the file being previewed");
+        if (content == null || content.length == 0)
+            throw ApiException.badRequest("the request body must be the CSV file to preview");
+        if (!fileName.toLowerCase(Locale.ROOT).endsWith(".csv"))
+        {
+            throw ApiException.validation(List.of(
+                            new ApiException.FieldError("filename", "invalid-value", "only .csv files can be previewed")));
+        }
+
+        File spooled = null;
+        try
+        {
+            spooled = Files.createTempFile("pp-import-preview-", ".csv").toFile();
+            Files.write(spooled.toPath(), content);
+
+            var importer = new CSVImporter(client, spooled);
+            importer.processFile(true);
+
+            var json = new JsonObject();
+
+            var columns = new JsonArray();
+            for (var column : importer.getColumns())
+            {
+                var columnJson = new JsonObject();
+                columnJson.addProperty("index", column.getColumnIndex());
+                columnJson.addProperty("label", column.getLabel());
+                columns.add(columnJson);
+            }
+            json.add("columns", columns);
+
+            var sampleRows = new JsonArray();
+            var rawValues = importer.getRawValues();
+            for (var ii = 0; ii < Math.min(5, rawValues.size()); ii++)
+            {
+                var row = new JsonArray();
+                for (var value : rawValues.get(ii))
+                    row.add(value);
+                sampleRows.add(row);
+            }
+            json.add("sampleRows", sampleRows);
+
+            var targets = new JsonArray();
+            for (var extractor : importer.getExtractors())
+            {
+                var targetJson = new JsonObject();
+                targetJson.addProperty("target", extractor.getCode());
+
+                var fields = new JsonArray();
+                for (var field : extractor.getFields())
+                    fields.add(fieldToJson(field, client));
+                targetJson.add("fields", fields);
+
+                targets.add(targetJson);
+            }
+            json.add("targets", targets);
+
+            return json;
+        }
+        catch (IOException e)
+        {
+            throw new ApiException(500, "internal-error", "The uploaded file could not be read");
+        }
+        finally
+        {
+            if (spooled != null)
+                deleteQuietly(spooled.toPath());
+        }
+    }
+
+    private static JsonObject fieldToJson(Field field, Client client)
+    {
+        var json = new JsonObject();
+        json.addProperty("code", field.getCode());
+        json.addProperty("name", field.getName());
+        json.addProperty("optional", field.isOptional());
+
+        var formats = new JsonArray();
+        for (var format : field.getAvailableFieldFormats())
+            if (format.getCode() != null)
+                formats.add(format.getCode());
+        json.add("formats", formats);
+
+        return json;
+    }
+
+    /**
      * Runs the extractor the file's name selects - the PDF assistant, which
      * auto-detects the issuing bank, the Interactive Brokers Flex reader, or a
      * CSV file read with a named saved {@code configLabel} - and keeps the
@@ -112,6 +217,22 @@ public final class ImportsHandler
      */
     public static JsonObject extract(Client client, String fileId, String fileName, byte[] content,
                     String configLabel)
+    {
+        return extract(client, fileId, fileName, content, configLabel, null, false);
+    }
+
+    /**
+     * As above, with a CSV upload's two other ways to name a column mapping: an
+     * inline {@code mappingJson} - the same shape {@code GET .../imports/configs}
+     * cannot show yet, {@link CSVConfig#fromJSON} field for field - built by a
+     * client that just walked its user through the columns {@code
+     * .../imports/csv-preview} reported, and {@code save}, which keeps it under
+     * its own {@code label} for later reuse by name. Exactly one of
+     * {@code configLabel} and {@code mappingJson} is required for a {@code .csv}
+     * upload; naming both is rejected rather than picking one silently.
+     */
+    public static JsonObject extract(Client client, String fileId, String fileName, byte[] content,
+                    String configLabel, String mappingJson, boolean save)
     {
         if (fileName == null || fileName.isBlank())
             throw ApiException.badRequest("the filename query parameter names the file being imported");
@@ -131,15 +252,33 @@ public final class ImportsHandler
         CSVConfig csvConfig = null;
         if (isCsv)
         {
-            if (configLabel == null || configLabel.isBlank())
+            var hasConfig = configLabel != null && !configLabel.isBlank();
+            var hasMapping = mappingJson != null && !mappingJson.isBlank();
+
+            if (hasConfig && hasMapping)
+            {
+                throw ApiException.validation(List.of(new ApiException.FieldError("mapping", "conflicting-value",
+                                "name either a saved config or an inline mapping, not both")));
+            }
+            else if (hasConfig)
+            {
+                csvConfig = CSVConfigs.byLabel(configLabel).orElseThrow(() -> ApiException.validation(
+                                List.of(new ApiException.FieldError("config", "unknown-reference",
+                                                "no saved CSV configuration named \"" + configLabel + "\""))));
+            }
+            else if (hasMapping)
+            {
+                csvConfig = parseMapping(mappingJson);
+                if (save)
+                    CSVConfigs.save(csvConfig);
+            }
+            else
             {
                 throw ApiException.validation(List.of(new ApiException.FieldError("config", "required",
-                                "the config query parameter names the saved CSV configuration to read the file with; "
-                                                + "GET .../imports/configs lists the available ones")));
+                                "the config query parameter names the saved CSV configuration to read the file with, "
+                                                + "or mapping supplies one inline; "
+                                                + "GET .../imports/configs lists the available saved ones")));
             }
-            csvConfig = CSVConfigs.byLabel(configLabel).orElseThrow(() -> ApiException.validation(
-                            List.of(new ApiException.FieldError("config", "unknown-reference",
-                                            "no saved CSV configuration named \"" + configLabel + "\""))));
         }
 
         // The extractors read a File, and the PDF one converts it to text first;
@@ -200,6 +339,40 @@ public final class ImportsHandler
      * the file is read once, already mapped, rather than auto-detected and
      * then corrected.
      */
+    /**
+     * Parses an inline {@code mapping} into the same {@link CSVConfig} a saved
+     * one is, using its own {@link CSVConfig#fromJSON} - so the shape is
+     * exactly what {@code CSVConfig#toJSON} produces and what a client that
+     * exported a desktop-built config already has: {@code label}, {@code
+     * target}, {@code delimiter}, {@code encoding}, {@code skipLines}, {@code
+     * isFirstLineHeader} and {@code columns} (each an ordered {@code label} /
+     * optional {@code field} code / optional {@code format} code, matched to
+     * the uploaded file's columns by position, not by column label).
+     */
+    private static CSVConfig parseMapping(String mappingJson)
+    {
+        try
+        {
+            var parsed = JSONValue.parseWithException(mappingJson);
+            if (!(parsed instanceof JSONObject json))
+            {
+                throw ApiException.validation(List.of(
+                                new ApiException.FieldError("mapping", "invalid-type", "mapping must be a JSON object")));
+            }
+
+            var config = new CSVConfig();
+            config.fromJSON(json);
+            return config;
+        }
+        catch (ParseException | RuntimeException e)
+        {
+            if (e instanceof ApiException apiException)
+                throw apiException;
+            throw ApiException.validation(List.of(new ApiException.FieldError("mapping", "invalid-value",
+                            String.valueOf(e.getMessage()))));
+        }
+    }
+
     private static List<Extractor.Item> extractCsv(Client client, File file, CSVConfig config,
                     List<Exception> errors) throws IOException
     {
