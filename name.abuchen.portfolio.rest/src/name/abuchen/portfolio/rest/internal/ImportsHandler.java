@@ -27,6 +27,8 @@ import name.abuchen.portfolio.datatransfer.actions.CheckTransactionDateAction;
 import name.abuchen.portfolio.datatransfer.actions.CheckValidTypesAction;
 import name.abuchen.portfolio.datatransfer.actions.DetectDuplicatesAction;
 import name.abuchen.portfolio.datatransfer.actions.InsertAction;
+import name.abuchen.portfolio.datatransfer.csv.CSVConfig;
+import name.abuchen.portfolio.datatransfer.csv.CSVImporter;
 import name.abuchen.portfolio.datatransfer.ibflex.IBFlexStatementExtractor;
 import name.abuchen.portfolio.datatransfer.pdf.PDFImportAssistant;
 import name.abuchen.portfolio.model.Account;
@@ -81,11 +83,35 @@ public final class ImportsHandler
     }
 
     /**
-     * Runs the extractor the file's name selects - the PDF assistant, which
-     * auto-detects the issuing bank, or the Interactive Brokers Flex reader -
-     * and keeps the result as a session to review.
+     * The configurations a {@code .csv} upload may name, each as its
+     * {@code label} and the extractor it targets ({@code account-transaction},
+     * {@code portfolio-transaction}, {@code investment-vehicle},
+     * {@code investment-vehicle-price} or {@code portfolio} - the same codes
+     * {@link name.abuchen.portfolio.datatransfer.csv.CSVExtractor#getCode()}
+     * returns). Only the bundled configurations are listed; see
+     * {@link CSVConfigs} for why a desktop-saved custom one is not.
      */
-    public static JsonObject extract(Client client, String fileId, String fileName, byte[] content)
+    public static JsonArray configs()
+    {
+        var array = new JsonArray();
+        for (var config : CSVConfigs.builtIn())
+        {
+            var json = new JsonObject();
+            json.addProperty("label", config.getLabel());
+            json.addProperty("target", config.getTarget());
+            array.add(json);
+        }
+        return array;
+    }
+
+    /**
+     * Runs the extractor the file's name selects - the PDF assistant, which
+     * auto-detects the issuing bank, the Interactive Brokers Flex reader, or a
+     * CSV file read with a named saved {@code configLabel} - and keeps the
+     * result as a session to review.
+     */
+    public static JsonObject extract(Client client, String fileId, String fileName, byte[] content,
+                    String configLabel)
     {
         if (fileName == null || fileName.isBlank())
             throw ApiException.badRequest("the filename query parameter names the file being imported");
@@ -95,10 +121,25 @@ public final class ImportsHandler
         var lower = fileName.toLowerCase(Locale.ROOT);
         var isPdf = lower.endsWith(".pdf");
         var isFlex = lower.endsWith(".xml");
-        if (!isPdf && !isFlex)
+        var isCsv = lower.endsWith(".csv");
+        if (!isPdf && !isFlex && !isCsv)
         {
             throw ApiException.validation(List.of(new ApiException.FieldError("filename", "invalid-value",
-                            "only .pdf and Interactive Brokers .xml Flex statements are supported")));
+                            "only .pdf, Interactive Brokers .xml Flex statements and .csv files are supported")));
+        }
+
+        CSVConfig csvConfig = null;
+        if (isCsv)
+        {
+            if (configLabel == null || configLabel.isBlank())
+            {
+                throw ApiException.validation(List.of(new ApiException.FieldError("config", "required",
+                                "the config query parameter names the saved CSV configuration to read the file with; "
+                                                + "GET .../imports/configs lists the available ones")));
+            }
+            csvConfig = CSVConfigs.byLabel(configLabel).orElseThrow(() -> ApiException.validation(
+                            List.of(new ApiException.FieldError("config", "unknown-reference",
+                                            "no saved CSV configuration named \"" + configLabel + "\""))));
         }
 
         // The extractors read a File, and the PDF one converts it to text first;
@@ -107,11 +148,14 @@ public final class ImportsHandler
         File spooled = null;
         try
         {
-            spooled = Files.createTempFile("pp-import-", isPdf ? ".pdf" : ".xml").toFile();
+            var suffix = isPdf ? ".pdf" : isCsv ? ".csv" : ".xml";
+            spooled = Files.createTempFile("pp-import-", suffix).toFile();
             Files.write(spooled.toPath(), content);
 
             var errors = new ArrayList<Exception>();
-            var items = isPdf ? extractPdf(client, spooled, errors) : extractFlex(client, spooled, errors);
+            var items = isPdf ? extractPdf(client, spooled, errors)
+                            : isCsv ? extractCsv(client, spooled, csvConfig, errors)
+                                            : extractFlex(client, spooled, errors);
 
             var session = ImportSessions.create(fileId, fileName, items,
                             errors.stream().map(ImportsHandler::describe).toList());
@@ -145,6 +189,24 @@ public final class ImportsHandler
     {
         var extractor = new IBFlexStatementExtractor(client);
         return extractor.extract(new SecurityCache(client), new Extractor.InputFile(file), errors);
+    }
+
+    /**
+     * Reads the spooled CSV with the named saved configuration and produces
+     * the same kind of {@link Extractor.Item}s the PDF and Flex extractors do,
+     * so review and apply need no CSV-specific handling. This mirrors the
+     * desktop wizard's own sequence in {@code CSVImportDefinitionPage}: the
+     * configuration is written into the importer before the first parse, so
+     * the file is read once, already mapped, rather than auto-detected and
+     * then corrected.
+     */
+    private static List<Extractor.Item> extractCsv(Client client, File file, CSVConfig config,
+                    List<Exception> errors) throws IOException
+    {
+        var importer = new CSVImporter(client, file);
+        config.writeTo(importer);
+        importer.processFile(false);
+        return importer.createItems(errors);
     }
 
     public static JsonObject preview(Client client, ImportSessions.Session session)

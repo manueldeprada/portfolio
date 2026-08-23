@@ -1624,8 +1624,9 @@ paths:
       description: |
         Uploads one bank statement and runs the extractor its **filename**
         selects — the PDF assistant, which auto-detects the issuing bank from
-        the document's own text, or the Interactive Brokers Flex reader for an
-        `.xml` statement. Nothing is written: the result is a **preview** to
+        the document's own text, the Interactive Brokers Flex reader for an
+        `.xml` statement, or a `.csv` file read with a named saved
+        configuration. Nothing is written: the result is a **preview** to
         review, kept as a session.
 
         The three-step shape (extract, review, apply) is not ceremony. An
@@ -1637,6 +1638,13 @@ paths:
         The body is the file itself, not a multipart form: the API takes one
         file per import, and the content type is whatever the file is.
 
+        A `.csv` upload additionally requires the `config` query parameter,
+        naming one of the saved configurations `GET .../imports/configs`
+        lists — a CSV has no format of its own to auto-detect, so the column
+        mapping has to be named rather than guessed. Only the bundled
+        configurations can be named today; a configuration saved from the
+        desktop wizard is not yet visible over the API.
+
         Sessions live in memory for 30 minutes and die with the application. A
         lost session costs a re-upload, which is why nothing is written until
         the apply step.
@@ -1645,8 +1653,17 @@ paths:
           in: query
           required: true
           description: |
-            The name of the uploaded file. It **selects the extractor** (`.pdf`
-            or `.xml`), so it is required rather than cosmetic.
+            The name of the uploaded file. It **selects the extractor** (`.pdf`,
+            `.xml` or `.csv`), so it is required rather than cosmetic.
+          schema:
+            type: string
+        - name: config
+          in: query
+          required: false
+          description: |
+            The saved CSV configuration to read the file with, by its `label`
+            (`GET .../imports/configs` lists the available ones). Required for
+            a `.csv` upload; ignored otherwise.
           schema:
             type: string
       requestBody:
@@ -1657,6 +1674,10 @@ paths:
               type: string
               format: binary
           application/xml:
+            schema:
+              type: string
+              format: binary
+          text/csv:
             schema:
               type: string
               format: binary
@@ -1681,6 +1702,51 @@ paths:
           $ref: "#/components/responses/ValidationFailed"
         "423":
           $ref: "#/components/responses/Locked"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/files/{file}/imports/configs:
+    parameters:
+      - $ref: "#/components/parameters/File"
+    get:
+      operationId: listImportConfigs
+      tags: [Imports]
+      summary: List the saved CSV import configurations
+      description: |
+        The configurations a `.csv` upload's `config` parameter may name, each
+        naming the extractor it feeds (`account-transaction`,
+        `portfolio-transaction`, `investment-vehicle`,
+        `investment-vehicle-price` or `portfolio`). Only the ones bundled with
+        the application are listed; see `createImport`'s description.
+      responses:
+        "200":
+          description: The available configurations.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  required: [label, target]
+                  properties:
+                    label:
+                      type: string
+                    target:
+                      type: string
+                      enum:
+                        - account-transaction
+                        - portfolio-transaction
+                        - investment-vehicle
+                        - investment-vehicle-price
+                        - portfolio
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "500":
           $ref: "#/components/responses/InternalError"
 

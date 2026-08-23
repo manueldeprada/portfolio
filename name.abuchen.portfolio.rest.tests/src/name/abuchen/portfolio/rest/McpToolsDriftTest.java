@@ -70,7 +70,8 @@ public class McpToolsDriftTest
                     "PATCH /v1/files/{file}/taxonomies/{taxonomy}/categories/{category}", //
                     "POST /v1/files/{file}/taxonomies/{taxonomy}/categories", //
                     "DELETE /v1/files/{file}/taxonomies/{taxonomy}/categories/{category}/assignments/{uuid}", //
-                    "PUT /v1/files/{file}/taxonomies/{taxonomy}/categories/{category}/assignments/{uuid}");
+                    "PUT /v1/files/{file}/taxonomies/{taxonomy}/categories/{category}/assignments/{uuid}", //
+                    "GET /v1/files/{file}/imports/configs");
 
     private static final Pattern TOOL_NAME = Pattern.compile("pp_[a-z0-9_]+");
 

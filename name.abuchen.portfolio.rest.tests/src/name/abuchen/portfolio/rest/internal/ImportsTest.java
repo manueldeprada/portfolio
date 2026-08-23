@@ -70,7 +70,7 @@ public class ImportsTest
     private static JsonObject extract(Client client, String fileName, String content)
     {
         return ImportsHandler.extract(client, "/tmp/test.portfolio", fileName,
-                        content.getBytes(StandardCharsets.UTF_8));
+                        content.getBytes(StandardCharsets.UTF_8), null);
     }
 
     private static List<String> typesOf(JsonObject preview)
@@ -268,7 +268,7 @@ public class ImportsTest
 
         try
         {
-            extract(client, "statement.csv", "a,b,c");
+            extract(client, "statement.ofx", "a,b,c");
             Assert.fail("expected a validation error");
         }
         catch (ApiException e)
@@ -285,13 +285,99 @@ public class ImportsTest
 
         try
         {
-            ImportsHandler.extract(client, "/tmp/test.portfolio", "flex.xml", new byte[0]);
+            ImportsHandler.extract(client, "/tmp/test.portfolio", "flex.xml", new byte[0], null);
             Assert.fail("expected a bad request");
         }
         catch (ApiException e)
         {
             assertThat(e.getStatus(), is(400));
         }
+    }
+
+    @Test
+    public void testACsvUploadWithoutAConfigIsRejected()
+    {
+        var client = fixture();
+
+        try
+        {
+            ImportsHandler.extract(client, "/tmp/test.portfolio", "statement.csv",
+                            "a,b,c".getBytes(StandardCharsets.UTF_8), null);
+            Assert.fail("expected a validation error");
+        }
+        catch (ApiException e)
+        {
+            assertThat(e.getStatus(), is(422));
+            assertThat(e.getErrors().get(0).field(), is("config"));
+            assertThat(e.getErrors().get(0).code(), is("required"));
+        }
+    }
+
+    @Test
+    public void testACsvUploadWithAnUnknownConfigIsRejected()
+    {
+        var client = fixture();
+
+        try
+        {
+            ImportsHandler.extract(client, "/tmp/test.portfolio", "statement.csv",
+                            "a,b,c".getBytes(StandardCharsets.UTF_8), "no such config");
+            Assert.fail("expected a validation error");
+        }
+        catch (ApiException e)
+        {
+            assertThat(e.getStatus(), is(422));
+            assertThat(e.getErrors().get(0).field(), is("config"));
+            assertThat(e.getErrors().get(0).code(), is("unknown-reference"));
+        }
+    }
+
+    @Test
+    public void testTheSavedConfigsAreListedByLabelAndTarget()
+    {
+        var configs = ImportsHandler.configs();
+
+        assertThat(configs.size(), greaterThan(0));
+
+        var config = configs.get(0).getAsJsonObject();
+        assertThat(config.get("label").getAsString().isBlank(), is(false));
+        assertThat(config.get("target").getAsString().isBlank(), is(false));
+    }
+
+    @Test
+    public void testACsvUploadWithASavedConfigExtractsItemsTheSameWayAsAnyOtherStatement()
+    {
+        var client = fixture();
+
+        var configs = ImportsHandler.configs();
+        var portfolioConfig = "";
+        for (var element : configs)
+        {
+            var config = element.getAsJsonObject();
+            if ("portfolio".equals(config.get("target").getAsString()))
+            {
+                portfolioConfig = config.get("label").getAsString();
+                break;
+            }
+        }
+        assertThat("a bundled config targeting the portfolio extractor is expected to exist",
+                        portfolioConfig.isBlank(), is(false));
+
+        // deliberately not exercising the built-in mapping's business rules (which
+        // columns are optional, which formats it expects) - that is core's own
+        // concern; what this asserts is that a CSV upload with a named config
+        // reaches the same extract/review pipeline PDF and Flex do, without error.
+        var csv = "Stück/Nom.;Bezeichnung;WKN;Typ;Währung;Akt. Kurs\n\n\n\n\n10;APPLE INC;865985;Aktie;USD;100,00\n";
+        var preview = ImportsHandler.extract(client, "/tmp/test.portfolio", "depot.csv",
+                        csv.getBytes(StandardCharsets.UTF_8), portfolioConfig);
+
+        assertThat(preview.get("id").getAsString(), notNullValue());
+        assertThat(preview.get("fileName").getAsString(), is("depot.csv"));
+        assertThat(preview.has("items"), is(true));
+        assertThat(preview.has("errors"), is(true));
+
+        // extraction alone must not write anything, exactly as for PDF and Flex
+        assertThat(client.getSecurities().isEmpty(), is(true));
     }
 
     @Test
