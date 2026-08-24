@@ -292,9 +292,29 @@ public final class ImportsHandler
             Files.write(spooled.toPath(), content);
 
             var errors = new ArrayList<Exception>();
-            var items = isPdf ? extractPdf(client, spooled, errors)
-                            : isCsv ? extractCsv(client, spooled, csvConfig, errors)
-                                            : extractFlex(client, spooled, errors);
+            List<Extractor.Item> items;
+            try
+            {
+                items = isPdf ? extractPdf(client, spooled, errors)
+                                : isCsv ? extractCsv(client, spooled, csvConfig, errors)
+                                                : extractFlex(client, spooled, errors);
+            }
+            catch (RuntimeException e)
+            {
+                // A CSV mapping naming a target whose fields don't fit the data - most often
+                // a "type" column holding values that aren't valid for the chosen target's
+                // transaction type, e.g. "BUY" against account-transaction's own enum, which
+                // only knows deposit/removal/interest/... - throws from inside the importer
+                // itself rather than failing to parse a single value. That is a client mistake
+                // (the wrong target or column mapping), not a server fault, so it is reported
+                // as a validation error naming the mapping rather than surfacing as a 500.
+                if (isCsv)
+                {
+                    throw ApiException.validation(List.of(new ApiException.FieldError("mapping", "invalid-value",
+                                    "the file could not be read with this mapping: " + e.getMessage())));
+                }
+                throw e;
+            }
 
             var session = ImportSessions.create(fileId, fileName, items,
                             errors.stream().map(ImportsHandler::describe).toList());

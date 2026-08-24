@@ -548,6 +548,46 @@ public class ImportsTest
     }
 
     @Test
+    public void testATypeValueOnlyValidForAnotherTargetIsAValidationErrorNotAServerError()
+    {
+        // "BUY" is a name.abuchen.portfolio.model.PortfolioTransaction.Type value, not one of
+        // AccountTransaction.Type's - a client naming the wrong target for its data (or a
+        // frontend defaulting to the first target the server lists) used to throw out of the
+        // importer itself and surface as an uncaught 500; it must be a 422 naming the mapping.
+        var client = fixture();
+
+        var mapping = """
+                        {
+                          "label": "Wrong Target",
+                          "target": "account-transaction",
+                          "delimiter": ",",
+                          "encoding": "UTF-8",
+                          "skipLines": 0,
+                          "isFirstLineHeader": true,
+                          "columns": [
+                            {"label": "date", "field": "date"},
+                            {"label": "type", "field": "type"},
+                            {"label": "value", "field": "value"}
+                          ]
+                        }
+                        """;
+
+        var csv = "date,type,value\n2026-08-24,BUY,100.00\n";
+
+        try
+        {
+            ImportsHandler.extract(client, "/tmp/test.portfolio", "statement.csv",
+                            csv.getBytes(StandardCharsets.UTF_8), null, mapping, false);
+            Assert.fail("expected a validation error");
+        }
+        catch (ApiException e)
+        {
+            assertThat(e.getStatus(), is(422));
+            assertThat(e.getErrors().get(0).field(), is("mapping"));
+        }
+    }
+
+    @Test
     public void testAnUnsavedInlineMappingIsNotListedAfterwards()
     {
         var client = fixture();
