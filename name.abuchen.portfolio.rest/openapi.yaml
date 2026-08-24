@@ -710,6 +710,65 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /v1/files/{file}/accounts:
+    parameters:
+      - $ref: "#/components/parameters/File"
+    post:
+      operationId: createCashAccount
+      tags: [Cash accounts]
+      summary: Create a new, empty cash account
+      description: |
+        Creates a cash account, exactly as the application's own "new
+        account" does. `currencyCode` must be one of the currencies the
+        application knows; an unrecognized one is a validation error rather
+        than a silently-accepted, unusable account. The response is the same
+        shape `GET .../cash-accounts/{uuid}` reports, with a `balance` of 0.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, currencyCode]
+              properties:
+                name:
+                  type: string
+                currencyCode:
+                  type: string
+            examples:
+              default:
+                value:
+                  name: USD Cash
+                  currencyCode: USD
+      responses:
+        "201":
+          description: The created cash account.
+          headers:
+            Location:
+              description: The URL of the created cash account.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CashAccount"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+        "423":
+          $ref: "#/components/responses/Locked"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /v1/files/{file}/cash-accounts/{uuid}:
     parameters:
       - $ref: "#/components/parameters/File"
@@ -869,6 +928,67 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/files/{file}/portfolios:
+    parameters:
+      - $ref: "#/components/parameters/File"
+    post:
+      operationId: createInvestmentAccount
+      tags: [Investment accounts]
+      summary: Create a new, empty investment account
+      description: |
+        Creates an investment account, exactly as the application's own "new
+        account" (investment side) does. `referenceAccount`, if given, must
+        be the uuid of an existing cash account and becomes the portfolio's
+        settlement account - the account a buy/sell/delivery booked into it
+        settles its cash leg against. The response is the same shape
+        `GET .../investment-accounts/{uuid}` reports, with a `value` of 0.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                referenceAccount:
+                  type: string
+                  description: The uuid of an existing cash account to use as the settlement account.
+            examples:
+              default:
+                value:
+                  name: Broker
+                  referenceAccount: c4b2a1e0-3f6d-4a2e-8b1c-5d7f9a0e2c46
+      responses:
+        "201":
+          description: The created investment account.
+          headers:
+            Location:
+              description: The URL of the created investment account.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/InvestmentAccount"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+        "423":
+          $ref: "#/components/responses/Locked"
         "500":
           $ref: "#/components/responses/InternalError"
 

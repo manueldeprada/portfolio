@@ -123,6 +123,12 @@ public final class ApiRoutes
                         (client, req) -> Response.json(200, AccountsHandler.balances(client, req.pathParam("uuid"), //$NON-NLS-1$
                                         req.queryParam("from"), req.queryParam("to")))), //$NON-NLS-1$ //$NON-NLS-2$
                         "from", "to"); //$NON-NLS-1$ //$NON-NLS-2$
+        router.add("POST", "/v1/files/{file}/accounts", write(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
+                        (file, req) -> {
+                            var entity = AccountsHandler.create(file.getClient(), parseObject(req));
+                            return Response.created("/v1/files/" + req.pathParam("file") + "/cash-accounts/" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                                            + entity.get("uuid").getAsString(), entity); //$NON-NLS-1$
+                        }));
 
         router.add("GET", "/v1/files/{file}/investment-accounts", calc(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
                         (context, req) -> Response.json(200, PortfoliosHandler.list(context.client(), context.factory(),
@@ -133,6 +139,12 @@ public final class ApiRoutes
                                         req.pathParam("uuid"), req.queryParam("date"), //$NON-NLS-1$ //$NON-NLS-2$
                                         req.queryParam("reportingCurrency")))), //$NON-NLS-1$
                         "date", "reportingCurrency"); //$NON-NLS-1$ //$NON-NLS-2$
+        router.add("POST", "/v1/files/{file}/portfolios", write(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
+                        (file, req) -> {
+                            var entity = PortfoliosHandler.create(file.getClient(), parseObject(req));
+                            return Response.created("/v1/files/" + req.pathParam("file") + "/investment-accounts/" //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                                            + entity.get("uuid").getAsString(), entity); //$NON-NLS-1$
+                        }));
 
         router.add("GET", "/v1/files/{file}/taxonomies", read(resolver, host,
                         (client, req) -> Response.json(200, TaxonomiesHandler.list(client))));

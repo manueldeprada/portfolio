@@ -9,9 +9,12 @@ import java.util.TreeMap;
 
 import com.google.gson.JsonElement;
 
+import com.google.gson.JsonObject;
+
 import name.abuchen.portfolio.model.Account;
 import name.abuchen.portfolio.model.Client;
 import name.abuchen.portfolio.money.CurrencyConverterImpl;
+import name.abuchen.portfolio.money.CurrencyUnit;
 import name.abuchen.portfolio.money.ExchangeRateProviderFactory;
 import name.abuchen.portfolio.money.Money;
 import name.abuchen.portfolio.snapshot.AccountSnapshot;
@@ -45,6 +48,34 @@ public final class AccountsHandler
         var converter = new CurrencyConverterImpl(factory, client.getBaseCurrency());
         var account = Entities.byUuid(client.getAccounts(), Account::getUUID, uuid);
         return EntityJson.toJson(account, balanceOf(account, converter, date));
+    }
+
+    /**
+     * Creates a new, empty cash account in the given currency, exactly as the
+     * application's own "new account" does. {@code name} is required and
+     * non-blank; {@code currencyCode} is required and must be one of the
+     * currencies the application knows ({@link CurrencyUnit#getInstance}).
+     */
+    public static JsonObject create(Client client, JsonObject body)
+    {
+        var errors = new ArrayList<ApiException.FieldError>();
+        var name = TaxonomiesHandler.requiredText(body, "name", errors); //$NON-NLS-1$
+        var currencyCode = TaxonomiesHandler.requiredText(body, "currencyCode", errors); //$NON-NLS-1$
+
+        if (currencyCode != null && CurrencyUnit.getInstance(currencyCode) == null)
+            errors.add(new ApiException.FieldError("currencyCode", "invalid-value", //$NON-NLS-1$ //$NON-NLS-2$
+                            "currencyCode must be a known ISO 4217 currency code")); //$NON-NLS-1$
+
+        if (!errors.isEmpty())
+            throw ApiException.validation(errors);
+
+        var account = new Account(name);
+        account.setCurrencyCode(currencyCode);
+
+        client.addAccount(account);
+        client.markDirty();
+
+        return EntityJson.toJson(account, Money.of(currencyCode, 0));
     }
 
     private static Money balanceOf(Account account, CurrencyConverterImpl converter, LocalDate date)

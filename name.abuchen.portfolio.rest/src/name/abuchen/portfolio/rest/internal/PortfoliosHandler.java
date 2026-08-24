@@ -5,7 +5,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 
+import name.abuchen.portfolio.model.Account;
 import name.abuchen.portfolio.model.Client;
 import name.abuchen.portfolio.model.Portfolio;
 import name.abuchen.portfolio.money.CurrencyConverterImpl;
@@ -27,6 +29,42 @@ public final class PortfoliosHandler
      * the host's per-file instance - it registers a listener on the client,
      * so this handler must not construct its own.
      */
+    /**
+     * Creates a new, empty investment account, exactly as the application's own
+     * "new account" (investment side) does. {@code name} is required and
+     * non-blank; {@code referenceAccount}, if given, must be the uuid of an
+     * existing cash account and becomes the portfolio's settlement account -
+     * the account a buy/sell/delivery in it books its cash leg against.
+     */
+    public static JsonObject create(Client client, JsonObject body)
+    {
+        var errors = new ArrayList<ApiException.FieldError>();
+        var name = TaxonomiesHandler.requiredText(body, "name", errors); //$NON-NLS-1$
+
+        Account referenceAccount = null;
+        if (body.has("referenceAccount") && !body.get("referenceAccount").isJsonNull()) //$NON-NLS-1$ //$NON-NLS-2$
+        {
+            var uuid = body.get("referenceAccount").getAsString(); //$NON-NLS-1$
+            referenceAccount = client.getAccounts().stream().filter(a -> a.getUUID().equals(uuid)).findAny()
+                            .orElse(null);
+            if (referenceAccount == null)
+                errors.add(new ApiException.FieldError("referenceAccount", "invalid-value", //$NON-NLS-1$ //$NON-NLS-2$
+                                "referenceAccount must be the uuid of an existing cash account")); //$NON-NLS-1$
+        }
+
+        if (!errors.isEmpty())
+            throw ApiException.validation(errors);
+
+        var portfolio = new Portfolio(name);
+        portfolio.setReferenceAccount(referenceAccount);
+
+        client.addPortfolio(portfolio);
+        client.markDirty();
+
+        var currency = referenceAccount != null ? referenceAccount.getCurrencyCode() : client.getBaseCurrency();
+        return EntityJson.toJson(portfolio, Money.of(currency, 0));
+    }
+
     public static JsonElement list(Client client, ExchangeRateProviderFactory factory, String dateParam,
                     String currencyParam)
     {

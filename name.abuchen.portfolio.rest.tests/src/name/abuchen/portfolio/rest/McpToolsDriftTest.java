@@ -72,7 +72,9 @@ public class McpToolsDriftTest
                     "DELETE /v1/files/{file}/taxonomies/{taxonomy}/categories/{category}/assignments/{uuid}", //
                     "PUT /v1/files/{file}/taxonomies/{taxonomy}/categories/{category}/assignments/{uuid}", //
                     "GET /v1/files/{file}/imports/configs", //
-                    "POST /v1/files/{file}/imports/csv-preview");
+                    "POST /v1/files/{file}/imports/csv-preview", //
+                    "POST /v1/files/{file}/accounts", //
+                    "POST /v1/files/{file}/portfolios");
 
     private static final Pattern TOOL_NAME = Pattern.compile("pp_[a-z0-9_]+");
 
