@@ -709,6 +709,22 @@ public final class CSVImporter
                 }
             }
 
+            // then: try the enum constant's own (English, locale-independent) name -
+            // "BUY" rather than whatever this JVM's locale localizes
+            // PortfolioTransaction.Type.BUY's toString() to. A CSV built without
+            // knowledge of the server's runtime locale (a REST client has no reason to
+            // know it, and a saved mapping is meant to be portable) can otherwise never
+            // name a type at all outside the one locale it happened to be written for.
+
+            for (Map.Entry<M, String> entry : enumMap.entrySet())
+            {
+                if (source.equalsIgnoreCase(entry.getKey().name()))
+                {
+                    pos.setIndex(source.length());
+                    return entry.getKey();
+                }
+            }
+
             // second: try as pattern
 
             for (Map.Entry<M, String> entry : enumMap.entrySet())

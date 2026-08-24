@@ -11,6 +11,7 @@ import static org.hamcrest.Matchers.nullValue;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 import org.junit.Assert;
 import org.junit.Test;
@@ -546,6 +547,53 @@ public class ImportsTest
         var reused = ImportsHandler.extract(client, "/tmp/test.portfolio", "depot2.csv",
                         SECURITIES_CSV.getBytes(StandardCharsets.UTF_8), "My Depot Mapping");
         assertThat(reused.has("items"), is(true));
+    }
+
+    @Test
+    public void testATypeColumnMatchesTheEnumConstantNameRegardlessOfServerLocale()
+    {
+        // EnumMapFormat#parseObject only matched a value against the *localized* display
+        // label (PortfolioTransaction.Type.BUY.toString(), "Compra" on a Spanish JVM) - a
+        // REST client (or an LLM asked to build a CSV from a plain-language prompt, this
+        // app's own documented shape) has no way to know the server's runtime locale, so
+        // "BUY" could only ever import successfully on an English-locale server. Reported
+        // live: a Spanish-locale daemon rejected every row of a "BUY" CSV with "No ha sido
+        // posible procesar 'BUY' con el patrón {Depósito=Depósito, ..., Compra=Compra, ...}".
+        var previousLocale = Locale.getDefault();
+        Locale.setDefault(new Locale("es", "ES"));
+        try
+        {
+            var client = fixture();
+
+            var mapping = """
+                            {
+                              "label": "Enum By Constant Name",
+                              "target": "portfolio",
+                              "delimiter": ",",
+                              "encoding": "UTF-8",
+                              "skipLines": 0,
+                              "isFirstLineHeader": true,
+                              "columns": [
+                                {"label": "date", "field": "date"},
+                                {"label": "type", "field": "type"},
+                                {"label": "name", "field": "name"},
+                                {"label": "shares", "field": "shares"},
+                                {"label": "value", "field": "value"}
+                              ]
+                            }
+                            """;
+
+            var csv = "date,type,name,shares,value\n2026-08-24,BUY,Apple Inc.,1,100.00\n";
+
+            var preview = ImportsHandler.extract(client, "/tmp/test.portfolio", "buy.csv",
+                            csv.getBytes(StandardCharsets.UTF_8), null, mapping, false);
+
+            assertThat(preview.toString(), preview.getAsJsonArray("errors").size(), is(0));
+        }
+        finally
+        {
+            Locale.setDefault(previousLocale);
+        }
     }
 
     @Test
