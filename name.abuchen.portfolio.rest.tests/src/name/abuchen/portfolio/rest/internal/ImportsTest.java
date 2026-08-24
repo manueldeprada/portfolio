@@ -16,6 +16,7 @@ import org.junit.Assert;
 import org.junit.Test;
 
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
@@ -545,6 +546,59 @@ public class ImportsTest
         var reused = ImportsHandler.extract(client, "/tmp/test.portfolio", "depot2.csv",
                         SECURITIES_CSV.getBytes(StandardCharsets.UTF_8), "My Depot Mapping");
         assertThat(reused.has("items"), is(true));
+    }
+
+    @Test
+    public void testAnInlineMappingWithNoExplicitFormatOnAnAmountOrDateFieldStillExtracts()
+    {
+        // CSVConfig#writeTo only sets a column's format from an explicit "format" in the
+        // mapping; when none is given (the common case - this app's own documented CSV
+        // shape, docs/table-to-csv-prompt.txt in the bursae repo, never sends one) it falls
+        // back to Field#guessFormat. That fallback used to call guessFormat only for its
+        // side effect and discard the FieldFormat it returned, leaving the column's format
+        // null - and CSVExtractor later dereferences it unconditionally
+        // (field2column.get(name).getFormat().getFormat()) to parse every date and amount
+        // value, so this crashed with a NullPointerException on the correct target too, not
+        // only a mismatched one.
+        var client = fixture();
+
+        var mapping = """
+                        {
+                          "label": "No Explicit Formats",
+                          "target": "portfolio",
+                          "delimiter": ",",
+                          "encoding": "UTF-8",
+                          "skipLines": 0,
+                          "isFirstLineHeader": true,
+                          "columns": [
+                            {"label": "date", "field": "date"},
+                            {"label": "type", "field": "type"},
+                            {"label": "name", "field": "name"},
+                            {"label": "shares", "field": "shares"},
+                            {"label": "value", "field": "value"}
+                          ]
+                        }
+                        """;
+
+        var csv = "date,type,name,shares,value\n2026-08-24,BUY,Apple Inc.,1,100.00\n";
+
+        var preview = ImportsHandler.extract(client, "/tmp/test.portfolio", "buy.csv",
+                        csv.getBytes(StandardCharsets.UTF_8), null, mapping, false);
+
+        // Two items, not one, is correct here and unrelated to this test's own concern:
+        // "Apple Inc." does not exist yet, so the transaction item comes with a second
+        // "create this instrument" item alongside it (see
+        // testApplyingBooksTheItemsAndCreatesTheInstrument). What this test actually
+        // checks is that the transaction item's own date/amount were read at all,
+        // rather than the whole extraction failing to parse "2026-08-24" against a
+        // locale-guessed format no sample value was ever given to reject.
+        assertThat(preview.toString(), preview.getAsJsonArray("errors").size(), is(0));
+        var transactionItem = preview.getAsJsonArray("items").asList().stream()
+                        .map(JsonElement::getAsJsonObject)
+                        .filter(item -> item.has("date"))
+                        .findFirst().orElseThrow();
+        assertThat(transactionItem.get("date").getAsString(), is("2026-08-24T00:00"));
+        assertThat(transactionItem.getAsJsonObject("amount").get("value").getAsInt(), is(10000));
     }
 
     @Test

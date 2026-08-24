@@ -399,7 +399,39 @@ public final class ImportsHandler
         var importer = new CSVImporter(client, file);
         config.writeTo(importer);
         importer.processFile(false);
+        reguessFormatsWithoutAnExplicitOne(client, config, importer);
         return importer.createItems(errors);
+    }
+
+    /**
+     * {@link CSVConfig#writeTo(CSVImporter)} runs before {@link CSVImporter#processFile}
+     * even reads the file, so a column with no explicit {@code format} in the mapping can
+     * only be guessed with no sample value at all - {@link Field#guessFormat} then falls
+     * back to the server's own default locale's date/number pattern, which has nothing to
+     * do with the file's actual format (a CSV of ISO dates like "2026-08-24" guessed a
+     * Spanish-locale daemon's "dd/MM/yy" and failed to parse every row - see
+     * ImportsTest#testAnInlineMappingWithNoExplicitFormatOnAnAmountOrDateFieldStillExtracts
+     * in the REST tests). Now that the file is loaded, every such column gets a second,
+     * better guess from its own first non-empty value - the same thing the desktop
+     * wizard's own auto-detect (`CSVImporter#mapToImportDefinition`) does when nothing
+     * overrides it. A column whose mapping *did* give an explicit format is left alone.
+     */
+    private static void reguessFormatsWithoutAnExplicitOne(Client client, CSVConfig config, CSVImporter importer)
+    {
+        var configColumns = config.getColumns();
+        var importerColumns = importer.getColumns();
+        for (var index = 0; index < configColumns.size() && index < importerColumns.length; index++)
+        {
+            if (configColumns.get(index).getFormat() != null)
+                continue;
+
+            var column = importerColumns[index];
+            var field = column.getField();
+            if (field == null)
+                continue;
+
+            column.setFormat(field.guessFormat(client, importer.getFirstNonEmptyValue(column)));
+        }
     }
 
     public static JsonObject preview(Client client, ImportSessions.Session session)
