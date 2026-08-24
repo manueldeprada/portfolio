@@ -548,12 +548,17 @@ public class ImportsTest
     }
 
     @Test
-    public void testATypeValueOnlyValidForAnotherTargetIsAValidationErrorNotAServerError()
+    public void testATypeValueOnlyValidForAnotherTargetIsAPerRowErrorNotAServerError()
     {
         // "BUY" is a name.abuchen.portfolio.model.PortfolioTransaction.Type value, not one of
         // AccountTransaction.Type's - a client naming the wrong target for its data (or a
-        // frontend defaulting to the first target the server lists) used to throw out of the
-        // importer itself and surface as an uncaught 500; it must be a 422 naming the mapping.
+        // frontend defaulting to the first target the server lists) used to throw a
+        // NullPointerException out of CSVConfig#writeTo (it called Field#guessFormat for its
+        // side effect and discarded the FieldFormat it returned, leaving every column whose
+        // format was not given explicitly - which is every EnumField, and any AmountField/
+        // DateField without an explicit "format" - with no format at all) and surfaced as an
+        // uncaught 500. With that fixed, CSVImporter's own per-row handling (BaseCSVExtractor)
+        // takes over correctly: an unparseable value is one line's error, not a fatal one.
         var client = fixture();
 
         var mapping = """
@@ -574,17 +579,11 @@ public class ImportsTest
 
         var csv = "date,type,value\n2026-08-24,BUY,100.00\n";
 
-        try
-        {
-            ImportsHandler.extract(client, "/tmp/test.portfolio", "statement.csv",
-                            csv.getBytes(StandardCharsets.UTF_8), null, mapping, false);
-            Assert.fail("expected a validation error");
-        }
-        catch (ApiException e)
-        {
-            assertThat(e.getStatus(), is(422));
-            assertThat(e.getErrors().get(0).field(), is("mapping"));
-        }
+        var preview = ImportsHandler.extract(client, "/tmp/test.portfolio", "statement.csv",
+                        csv.getBytes(StandardCharsets.UTF_8), null, mapping, false);
+
+        assertThat(preview.getAsJsonArray("items").size(), is(0));
+        assertThat(JsonParser.parseString(preview.toString()).getAsJsonObject().has("errors"), is(true));
     }
 
     @Test

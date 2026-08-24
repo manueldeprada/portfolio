@@ -34,7 +34,7 @@ public class CSVConfig
         String COLUMNS = "columns";
     }
 
-    private static class CSVColumnConfig
+    public static class CSVColumnConfig
     {
         private String label;
         private String code;
@@ -81,6 +81,20 @@ public class CSVConfig
     private boolean isFirstLineHeader = true;
 
     private List<CSVColumnConfig> columns = new ArrayList<>();
+
+    /**
+     * The column setup this config carries, in file order - exposed so a caller that
+     * loads the actual file *after* {@link #writeTo(CSVImporter)} (which runs before
+     * the file is even read, so it cannot sample a column's own values) can tell which
+     * columns were given an explicit {@code format} and which were left for
+     * {@link Field#guessFormat} to fill in from whatever it has - which, at that point,
+     * is nothing but the client's default locale. See {@code ImportsHandler} in the
+     * REST bundle for the follow-up guess this makes possible once real rows exist.
+     */
+    public List<CSVColumnConfig> getColumns()
+    {
+        return columns;
+    }
 
     public String getLabel()
     {
@@ -158,7 +172,7 @@ public class CSVConfig
                     copy.setFormat(field.get().textToFormat(format));
 
                 if (copy.getFormat() == null)
-                    field.get().guessFormat(importer.getClient(), null);
+                    copy.setFormat(field.get().guessFormat(importer.getClient(), null));
             }
 
             setup.add(copy);
