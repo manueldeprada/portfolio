@@ -33,6 +33,7 @@ import name.abuchen.portfolio.datatransfer.actions.CheckValidTypesAction;
 import name.abuchen.portfolio.datatransfer.actions.DetectDuplicatesAction;
 import name.abuchen.portfolio.datatransfer.actions.InsertAction;
 import name.abuchen.portfolio.datatransfer.csv.CSVConfig;
+import name.abuchen.portfolio.datatransfer.csv.CSVExtractor;
 import name.abuchen.portfolio.datatransfer.csv.CSVImporter;
 import name.abuchen.portfolio.datatransfer.csv.CSVImporter.Field;
 import name.abuchen.portfolio.datatransfer.ibflex.IBFlexStatementExtractor;
@@ -122,6 +123,10 @@ public final class ImportsHandler
      * with whatever the wrong delimiter produced - but its mapping should be
      * built against the fields it will actually reach after posting to
      * {@code .../imports} with those settings named explicitly.
+     * <p>
+     * Each target also carries the mapping the application would auto-detect
+     * for it - see {@link #guessesFor} - so a client can offer a filled-in
+     * mapping to correct rather than an empty one to build.
      */
     public static JsonObject previewCsv(Client client, String fileName, byte[] content)
     {
@@ -192,6 +197,8 @@ public final class ImportsHandler
                     fields.add(fieldToJson(field));
                 targetJson.add("fields", fields);
 
+                targetJson.add("guesses", guessesFor(importer, extractor));
+
                 targets.add(targetJson);
             }
             json.add("targets", targets);
@@ -202,11 +209,59 @@ public final class ImportsHandler
         {
             throw new ApiException(500, "internal-error", "The uploaded file could not be read");
         }
+        catch (ApiException e)
+        {
+            throw e;
+        }
+        catch (RuntimeException e)
+        {
+            // as above: a file this cannot be parsed is the caller's, not a fault
+            // of the server's, and auto-detecting a mapping is parsing too
+            throw ApiException.validation(List.of(new ApiException.FieldError("file", "invalid-value",
+                            "the uploaded file could not be read as CSV: " + e)));
+        }
         finally
         {
             if (spooled != null)
                 deleteQuietly(spooled.toPath());
         }
+    }
+
+    /**
+     * The mapping the application itself would auto-detect for this target: one
+     * entry per column of the file, naming the field its header matched and the
+     * format guessed for it, either {@code null} where nothing matched.
+     * <p>
+     * This is not a second, weaker matcher written for the API. It is
+     * {@code CSVImporter#mapToImportDefinition}, the desktop wizard's own
+     * auto-detect, which matches a header against every field's <em>normalized
+     * alias set</em> - umlaut folding, whitespace stripping, and each field's
+     * several names ("Quote"/"Schluss"/"Schlusskurs"/"Close"). The server
+     * already ran it and reported only the column index and label; a client had
+     * no way to reproduce it and so started every mapping from nothing.
+     * <p>
+     * It is run once per target because the importer auto-detects against
+     * whichever extractor is currently selected, and which target fits is
+     * exactly what the client is still deciding. Re-reading the file per target
+     * is also what gives every format guess the column's real first value to go
+     * on rather than nothing (see {@code AmountField#guessFormat} and
+     * {@link #reguessFormatsWithoutAnExplicitOne}).
+     */
+    private static JsonArray guessesFor(CSVImporter importer, CSVExtractor extractor) throws IOException
+    {
+        importer.setExtractor(extractor);
+        importer.processFile(true);
+
+        var guesses = new JsonArray();
+        for (var column : importer.getColumns())
+        {
+            var guess = new JsonObject();
+            guess.addProperty("column", column.getColumnIndex());
+            guess.addProperty("field", column.getField() == null ? null : column.getField().getCode());
+            guess.addProperty("format", column.getFormat() == null ? null : column.getFormat().getCode());
+            guesses.add(guess);
+        }
+        return guesses;
     }
 
     /**

@@ -452,6 +452,74 @@ public class ImportsTest
         return byCode;
     }
 
+    /** The one target's guesses, as "column index -> field code" (absent when null). */
+    private static JsonObject guessesOf(JsonObject preview, String target)
+    {
+        var byColumn = new JsonObject();
+        for (var element : preview.getAsJsonArray("targets"))
+        {
+            var candidate = element.getAsJsonObject();
+            if (!target.equals(candidate.get("target").getAsString()))
+                continue;
+            for (var guess : candidate.getAsJsonArray("guesses"))
+                byColumn.add(String.valueOf(guess.getAsJsonObject().get("column").getAsInt()), guess);
+        }
+        return byColumn;
+    }
+
+    @Test
+    public void testEveryTargetReportsTheMappingTheApplicationWouldAutoDetect()
+    {
+        // the header uses one of the alias names ("Close") rather than the field's
+        // own localized display name, which is precisely what a client cannot
+        // reproduce and the application's own matcher can
+        var d = String.valueOf(TextUtil.getListSeparatorChar());
+        var csv = Messages.CSVColumn_Date + d + "Close" + d + "Something Else\n" //
+                        + "2026-08-24" + d + "100.00" + d + "x\n";
+
+        var preview = ImportsHandler.previewCsv(fixture(), "quotes.csv", csv.getBytes(StandardCharsets.UTF_8));
+
+        var guesses = guessesOf(preview, "investment-vehicle-price");
+        assertThat(preview.toString(), guesses.getAsJsonObject("0").get("field").getAsString(), is("date"));
+        assertThat(preview.toString(), guesses.getAsJsonObject("1").get("field").getAsString(), is("quote"));
+
+        // a column nothing matched is reported, with a null field, rather than omitted
+        assertThat(guesses.getAsJsonObject("2").get("field").isJsonNull(), is(true));
+        assertThat(guesses.getAsJsonObject("2").get("format").isJsonNull(), is(true));
+    }
+
+    @Test
+    public void testAGuessedFormatComesFromTheColumnsOwnValues()
+    {
+        var d = String.valueOf(TextUtil.getListSeparatorChar());
+        var csv = Messages.CSVColumn_Date + d + "Close\n" //
+                        + "2026-08-24" + d + "100.00\n";
+
+        var preview = ImportsHandler.previewCsv(fixture(), "quotes.csv", csv.getBytes(StandardCharsets.UTF_8));
+
+        var guesses = guessesOf(preview, "investment-vehicle-price");
+        assertThat(guesses.getAsJsonObject("0").get("format").getAsString(), is("yyyy-MM-dd"));
+        assertThat(guesses.getAsJsonObject("1").get("format").getAsString(), is("0,000.00"));
+    }
+
+    @Test
+    public void testTheGuessesAreComputedPerTargetNotOnlyForTheFirstOne()
+    {
+        // "Close" is a name of investment-vehicle-price's quote field and of no
+        // field of account-transaction, so the two targets must disagree - which
+        // they cannot if auto-detection only ever ran against the first extractor
+        var d = String.valueOf(TextUtil.getListSeparatorChar());
+        var csv = Messages.CSVColumn_Date + d + "Close\n" //
+                        + "2026-08-24" + d + "100.00\n";
+
+        var preview = ImportsHandler.previewCsv(fixture(), "quotes.csv", csv.getBytes(StandardCharsets.UTF_8));
+
+        assertThat(guessesOf(preview, "investment-vehicle-price").getAsJsonObject("1").get("field").getAsString(),
+                        is("quote"));
+        assertThat(guessesOf(preview, "account-transaction").getAsJsonObject("1").get("field").isJsonNull(),
+                        is(true));
+    }
+
     @Test
     public void testEachFieldSaysWhatKindOfValueItHolds()
     {

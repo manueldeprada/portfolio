@@ -1894,6 +1894,13 @@ paths:
         The body is the `.csv` file itself, up to **16 MiB** like
         `createImport`, rather than the 1 MiB every JSON endpoint is held to.
 
+        Every target also carries `guesses`: the mapping the application's own
+        auto-detect produces for that target, one entry per column. It is the
+        desktop wizard's matcher, not a weaker one written for the API, and a
+        client cannot reproduce it — so the intended flow is to show the
+        guesses for the chosen target as a filled-in mapping for the user to
+        correct, rather than an empty one to build.
+
         Each field says what `type` of value it holds (`text`, `date`,
         `amount`, `enum`, `isin`) and lists the `formats` `createImport`'s
         `mapping.columns[].format` accepts for it, each with its own display
@@ -1946,7 +1953,7 @@ paths:
                     type: array
                     items:
                       type: object
-                      required: [target, fields]
+                      required: [target, fields, guesses]
                       properties:
                         target:
                           type: string
@@ -1956,6 +1963,34 @@ paths:
                             - investment-vehicle
                             - investment-vehicle-price
                             - portfolio
+                        guesses:
+                          type: array
+                          description: |
+                            The mapping the application itself would
+                            auto-detect for this target — one entry per column
+                            of the file, in file order. `field` is the field
+                            code the column's header matched, `format` the
+                            format guessed for it from the column's own first
+                            non-empty value; either is `null` where there is
+                            nothing to say. Matching folds umlauts and
+                            whitespace and knows each field's several names
+                            (`Quote`, `Schluss`, `Schlusskurs`, `Close`), so a
+                            client cannot reproduce it and should offer it as a
+                            filled-in mapping to correct rather than start from
+                            an empty one.
+                          items:
+                            type: object
+                            required: [column, field, format]
+                            properties:
+                              column:
+                                type: integer
+                                description: The index in `columns`.
+                              field:
+                                type: string
+                                nullable: true
+                              format:
+                                type: string
+                                nullable: true
                         fields:
                           type: array
                           items:
