@@ -437,6 +437,117 @@ public class ImportsTest
         }
     }
 
+    /** The one target's fields, by field code. */
+    private static JsonObject fieldsOf(JsonObject preview, String target)
+    {
+        var byCode = new JsonObject();
+        for (var element : preview.getAsJsonArray("targets"))
+        {
+            var candidate = element.getAsJsonObject();
+            if (!target.equals(candidate.get("target").getAsString()))
+                continue;
+            for (var field : candidate.getAsJsonArray("fields"))
+                byCode.add(field.getAsJsonObject().get("code").getAsString(), field);
+        }
+        return byCode;
+    }
+
+    @Test
+    public void testEachFieldSaysWhatKindOfValueItHolds()
+    {
+        var preview = ImportsHandler.previewCsv(fixture(), "depot.csv",
+                        SECURITIES_CSV.getBytes(StandardCharsets.UTF_8));
+
+        var fields = fieldsOf(preview, "portfolio-transaction");
+        assertThat(fields.getAsJsonObject("date").get("type").getAsString(), is("date"));
+        assertThat(fields.getAsJsonObject("value").get("type").getAsString(), is("amount"));
+        assertThat(fields.getAsJsonObject("type").get("type").getAsString(), is("enum"));
+        assertThat(fields.getAsJsonObject("isin").get("type").getAsString(), is("isin"));
+        assertThat(fields.getAsJsonObject("name").get("type").getAsString(), is("text"));
+    }
+
+    @Test
+    public void testAFormatIsReportedWithItsOwnLabelNotOnlyItsCode()
+    {
+        var preview = ImportsHandler.previewCsv(fixture(), "depot.csv",
+                        SECURITIES_CSV.getBytes(StandardCharsets.UTF_8));
+
+        var formats = fieldsOf(preview, "portfolio-transaction").getAsJsonObject("value")
+                        .getAsJsonArray("formats");
+        assertThat(formats.size(), is(2));
+
+        var codes = new ArrayList<String>();
+        for (var element : formats)
+        {
+            var format = element.getAsJsonObject();
+            codes.add(format.get("code").getAsString());
+            // a code like "0.000,00" is a pattern; the label is what a person reads
+            assertThat(format.get("label").getAsString().isBlank(), is(false));
+        }
+        assertThat(codes, hasItem("0.000,00"));
+        assertThat(codes, hasItem("0,000.00"));
+    }
+
+    @Test
+    public void testAnEnumFieldReportsTheConstantsAColumnCanBeMappedTo()
+    {
+        // an enum field has no available formats at all, so without these a client
+        // has no way to discover what the "KEY=text;" format it must build may name
+        var preview = ImportsHandler.previewCsv(fixture(), "depot.csv",
+                        SECURITIES_CSV.getBytes(StandardCharsets.UTF_8));
+
+        var type = fieldsOf(preview, "portfolio-transaction").getAsJsonObject("type");
+        assertThat(type.getAsJsonArray("formats").size(), is(0));
+
+        var keys = new ArrayList<String>();
+        for (var element : type.getAsJsonArray("values"))
+        {
+            var value = element.getAsJsonObject();
+            keys.add(value.get("key").getAsString());
+            assertThat(value.get("label").getAsString().isBlank(), is(false));
+        }
+        assertThat(keys, hasItem("BUY"));
+        assertThat(keys, hasItem("SELL"));
+    }
+
+    @Test
+    public void testAnEnumFormatBuiltFromThoseKeysRoundTripsThroughAnInlineMapping()
+    {
+        // what a client does with `values`: it writes the file's own words against
+        // the keys and sends that back as the column's `format`
+        var client = fixture();
+
+        var mapping = """
+                        {
+                          "label": "Spanish Words",
+                          "target": "portfolio",
+                          "delimiter": ",",
+                          "encoding": "UTF-8",
+                          "skipLines": 0,
+                          "isFirstLineHeader": true,
+                          "columns": [
+                            {"label": "date", "field": "date"},
+                            {"label": "type", "field": "type", "format": "BUY=compra;SELL=venta"},
+                            {"label": "name", "field": "name"},
+                            {"label": "shares", "field": "shares"},
+                            {"label": "value", "field": "value"}
+                          ]
+                        }
+                        """;
+
+        var csv = "date,type,name,shares,value\n2026-08-24,compra,Apple Inc.,1,100.00\n";
+
+        var preview = ImportsHandler.extract(client, "/tmp/test.portfolio", "buy.csv",
+                        csv.getBytes(StandardCharsets.UTF_8), null, mapping, false);
+
+        assertThat(preview.toString(), preview.getAsJsonArray("errors").size(), is(0));
+        var transactionItem = preview.getAsJsonArray("items").asList().stream() //
+                        .map(JsonElement::getAsJsonObject) //
+                        .filter(item -> item.has("amount")) //
+                        .findFirst().orElseThrow();
+        assertThat(transactionItem.getAsJsonObject("amount").get("value").getAsInt(), is(100));
+    }
+
     @Test
     public void testCsvPreviewReadsAFileWhoseRowsAreShorterThanItsHeader()
     {

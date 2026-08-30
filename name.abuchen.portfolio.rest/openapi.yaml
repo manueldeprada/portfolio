@@ -1894,11 +1894,15 @@ paths:
         The body is the `.csv` file itself, up to **16 MiB** like
         `createImport`, rather than the 1 MiB every JSON endpoint is held to.
 
-        Each field's `formats` lists the format codes `createImport`'s
-        `mapping.columns[].format` accepts for that field (a date field's
-        available patterns, an amount field's decimal-separator convention);
-        omitting `format` lets the importer guess one from the column's first
-        non-empty value, exactly as the desktop wizard's live preview does.
+        Each field says what `type` of value it holds (`text`, `date`,
+        `amount`, `enum`, `isin`) and lists the `formats` `createImport`'s
+        `mapping.columns[].format` accepts for it, each with its own display
+        label — a date field's available patterns, an amount field's
+        decimal-separator convention. Omitting `format` lets the importer guess
+        one from the column's first non-empty value, exactly as the desktop
+        wizard's live preview does. An `enum` field has no formats to choose
+        from and carries `values` instead: its format is the mapping from the
+        file's own words to the enum constants, `KEY=text;KEY2=other`.
       parameters:
         - name: filename
           in: query
@@ -1956,18 +1960,68 @@ paths:
                           type: array
                           items:
                             type: object
-                            required: [code, name, optional, formats]
+                            required: [code, name, optional, type, formats]
                             properties:
                               code:
                                 type: string
+                                description: |
+                                  The stable field code a mapping's
+                                  `columns[].field` names. Not translated.
                               name:
                                 type: string
+                                description: The localized display name. Never an identifier.
                               optional:
                                 type: boolean
+                              type:
+                                type: string
+                                description: |
+                                  What kind of value the field holds, derived
+                                  from the field itself rather than from a
+                                  table of codes the client would have to keep
+                                  in step. `enum` is the one that also carries
+                                  `values`.
+                                enum: [text, date, amount, enum, isin]
                               formats:
                                 type: array
+                                description: |
+                                  The formats this field accepts, each as the
+                                  `code` a mapping's `columns[].format` carries
+                                  and the `label` the application shows for it
+                                  — a code like `dd.MM.yy` is a pattern, not
+                                  something to put in front of a person. Empty
+                                  for a field with no choice to make, including
+                                  every `enum` field, whose format is the value
+                                  mapping described under `values`.
                                 items:
-                                  type: string
+                                  type: object
+                                  required: [code, label]
+                                  properties:
+                                    code:
+                                      type: string
+                                    label:
+                                      type: string
+                              values:
+                                type: array
+                                description: |
+                                  Present on an `enum` field only. The constants
+                                  the column can be mapped to: `key` is the
+                                  stable enum constant name, `label` the
+                                  localized text the application shows. An enum
+                                  column's `format` in a mapping is the
+                                  file's own words written against these keys,
+                                  `KEY=text;KEY2=other` — the same shape every
+                                  bundled configuration uses. Import also
+                                  accepts a value that is literally the `key`,
+                                  so a column already written as `BUY`/`SELL`
+                                  needs no `format` at all.
+                                items:
+                                  type: object
+                                  required: [key, label]
+                                  properties:
+                                    key:
+                                      type: string
+                                    label:
+                                      type: string
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":

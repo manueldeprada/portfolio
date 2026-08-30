@@ -189,7 +189,7 @@ public final class ImportsHandler
 
                 var fields = new JsonArray();
                 for (var field : extractor.getFields())
-                    fields.add(fieldToJson(field, client));
+                    fields.add(fieldToJson(field));
                 targetJson.add("fields", fields);
 
                 targets.add(targetJson);
@@ -209,20 +209,80 @@ public final class ImportsHandler
         }
     }
 
-    private static JsonObject fieldToJson(Field field, Client client)
+    /**
+     * One field a target extractor can be given a column for: its stable
+     * {@code code}, its localized display {@code name}, whether it is
+     * {@code optional}, the {@code type} of value it holds, the {@code formats}
+     * it accepts, and - for an enum-typed field - the {@code values} it can be
+     * mapped to.
+     * <p>
+     * The {@code type} is what lets a client render the right control for a
+     * column without a table of field codes of its own; it is derived from the
+     * {@link Field} subclass, so it stays true as extractors gain fields.
+     * <p>
+     * A format is reported as its {@code code} (what a mapping's
+     * {@code columns[].format} carries) together with the {@code label} the
+     * application shows for it, since a code like {@code dd.MM.yy} is a pattern
+     * rather than something to put in front of a person.
+     */
+    private static JsonObject fieldToJson(Field field)
     {
         var json = new JsonObject();
         json.addProperty("code", field.getCode());
         json.addProperty("name", field.getName());
         json.addProperty("optional", field.isOptional());
+        json.addProperty("type", typeOf(field));
 
         var formats = new JsonArray();
         for (var format : field.getAvailableFieldFormats())
-            if (format.getCode() != null)
-                formats.add(format.getCode());
+        {
+            if (format.getCode() == null)
+                continue;
+
+            var formatJson = new JsonObject();
+            formatJson.addProperty("code", format.getCode());
+            formatJson.addProperty("label", format.toString());
+            formats.add(formatJson);
+        }
         json.add("formats", formats);
 
+        // An enum field has no available formats at all - its format *is* the
+        // mapping from the file's own words to the enum's constants, written as
+        // "KEY=text;KEY2=other" (EnumField#formatToText, the shape every bundled
+        // configuration already uses). Without the constants a client cannot
+        // build that string, so they are reported here: the stable key to write
+        // on the left of the "=", and the label the application shows, which is
+        // localized and therefore no good as an identifier.
+        if (field instanceof CSVImporter.EnumField<?> enumField)
+            json.add("values", enumValues(enumField));
+
         return json;
+    }
+
+    private static String typeOf(Field field)
+    {
+        if (field instanceof CSVImporter.DateField)
+            return "date";
+        if (field instanceof CSVImporter.AmountField)
+            return "amount";
+        if (field instanceof CSVImporter.EnumField)
+            return "enum";
+        if (field instanceof CSVImporter.ISINField)
+            return "isin";
+        return "text";
+    }
+
+    private static JsonArray enumValues(CSVImporter.EnumField<?> field)
+    {
+        var values = new JsonArray();
+        for (var constant : field.getEnumType().getEnumConstants())
+        {
+            var json = new JsonObject();
+            json.addProperty("key", constant.name());
+            json.addProperty("label", constant.toString());
+            values.add(json);
+        }
+        return values;
     }
 
     /**
