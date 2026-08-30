@@ -993,6 +993,64 @@ public class ImportsTest
         assertThat(JsonParser.parseString(preview.toString()).getAsJsonObject().has("errors"), is(true));
     }
 
+    private static final String NOTE_MAPPING = """
+                    {
+                      "label": "With Notes",
+                      "target": "portfolio-transaction",
+                      "delimiter": ",",
+                      "encoding": "UTF-8",
+                      "skipLines": 0,
+                      "isFirstLineHeader": true,
+                      "columns": [
+                        {"label": "date", "field": "date"},
+                        {"label": "type", "field": "type"},
+                        {"label": "name", "field": "name"},
+                        {"label": "shares", "field": "shares"},
+                        {"label": "value", "field": "value"},
+                        {"label": "note", "field": "note"}
+                      ]
+                    }
+                    """;
+
+    private static final String NOTE_CSV = "date,type,name,shares,value,note\n"
+                    + "2026-08-24,BUY,Apple Inc.,1,100.00,order 4711\n";
+
+    /** Books the note-carrying CSV and answers the note the transaction ended up with. */
+    private static String noteAfterApplying(Boolean importNotesFromSource)
+    {
+        var client = fixture();
+
+        var preview = ImportsHandler.extract(client, "/tmp/test.portfolio", "buy.csv",
+                        NOTE_CSV.getBytes(StandardCharsets.UTF_8), null, NOTE_MAPPING, false);
+        var session = ImportSessions.get("/tmp/test.portfolio", preview.get("id").getAsString());
+
+        var body = new JsonObject();
+        body.add("items", indices(preview));
+        var accounts = new JsonObject();
+        accounts.addProperty("USD", account(client).getUUID());
+        body.add("accounts", accounts);
+        body.addProperty("portfolio", client.getPortfolios().get(0).getUUID());
+        if (importNotesFromSource != null)
+            body.addProperty("importNotesFromSource", importNotesFromSource);
+
+        ImportsHandler.apply(client, session, body);
+
+        return client.getPortfolios().get(0).getTransactions().get(0).getNote();
+    }
+
+    @Test
+    public void testTheStatementsOwnNoteIsKeptByDefault()
+    {
+        assertThat(noteAfterApplying(null), is("order 4711"));
+        assertThat(noteAfterApplying(Boolean.TRUE), is("order 4711"));
+    }
+
+    @Test
+    public void testTheStatementsOwnNoteCanBeDropped()
+    {
+        assertThat(noteAfterApplying(Boolean.FALSE), is(nullValue()));
+    }
+
     private static final String PRICE_MAPPING = """
                     {
                       "label": "Quotes",

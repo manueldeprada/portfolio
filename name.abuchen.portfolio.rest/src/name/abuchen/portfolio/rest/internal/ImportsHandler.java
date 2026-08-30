@@ -746,6 +746,10 @@ public final class ImportsHandler
         var portfolio = readPortfolio(client, body, errors);
         var convertBuySellToDelivery = readFlag(body, "convertBuySellToDelivery", errors, false);
         var skipDividends = readFlag(body, "skipDividends", errors, false);
+        // the desktop's review page offers this too, and remembers it per extractor
+        // with "on" as the state it starts in; the API has nowhere to remember a
+        // preference, so it simply defaults to that same "on"
+        var importNotesFromSource = readFlag(body, "importNotesFromSource", errors, true);
         var security = readSecurity(client, session, body, errors);
 
         var selected = new ArrayList<Extractor.Item>();
@@ -781,7 +785,14 @@ public final class ImportsHandler
         var securitiesBefore = client.getSecurities().size();
 
         for (var item : selected)
+        {
+            // exactly where the wizard drops it (ImportController#importPage): on
+            // the item, before it is booked, so nothing downstream has to know
+            if (!importNotesFromSource)
+                item.setNote(null);
+
             item.apply(action, context);
+        }
 
         client.markDirty();
         ImportSessions.discard(session.id());

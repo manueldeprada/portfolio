@@ -4195,6 +4195,14 @@ components:
         skipDividends:
           type: boolean
           description: Leave dividend items out, for a statement whose dividends are recorded elsewhere.
+        importNotesFromSource:
+          type: boolean
+          default: true
+          description: |
+            Keep the note the extractor read out of the statement (an order
+            reference, a booking text) on each booked transaction. Set `false`
+            to drop it. The default matches the desktop's own review page, which
+            starts with this on.
 
     TransactionCreate:
       type: object
