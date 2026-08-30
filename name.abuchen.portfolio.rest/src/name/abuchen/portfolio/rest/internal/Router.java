@@ -10,16 +10,38 @@ import java.util.Set;
 
 public class Router
 {
+    /**
+     * The largest request body a route accepts unless it says otherwise.
+     * Handlers parse JSON, so a body is buffered whole - without a limit any
+     * local process could make the application allocate arbitrary amounts of
+     * memory, and the pairing endpoints do not even require a token. A JSON
+     * merge patch of a portfolio entity is orders of magnitude smaller.
+     */
+    public static final int DEFAULT_MAX_REQUEST_BODY = 1024 * 1024;
+
+    /**
+     * The largest request body an upload route accepts. The reasoning above is
+     * about JSON documents a client composes, and does not carry over to a
+     * route whose body <em>is</em> a file somebody exported from their bank: a
+     * year of PDF statements or a full transaction history in CSV legitimately
+     * runs to several megabytes, and rejecting one is a dead end for the caller
+     * rather than a hint to send something smaller. The body is still bounded,
+     * and still by reading one byte past the limit rather than by trusting
+     * Content-Length.
+     */
+    public static final int MAX_UPLOAD_BODY = 16 * 1024 * 1024;
+
     public interface Handler
     {
         Response handle(Request request) throws Exception;
     }
 
-    public record Match(Handler handler, Map<String, String> pathParams)
+    public record Match(Handler handler, Map<String, String> pathParams, int maxRequestBody)
     {
     }
 
-    private record Route(String method, String[] segments, Set<String> queryParams, Handler handler)
+    private record Route(String method, String[] segments, Set<String> queryParams, int maxRequestBody,
+                    Handler handler)
     {
     }
 
@@ -31,11 +53,25 @@ public class Router
      */
     public void add(String method, String pattern, Handler handler, String... queryParams)
     {
+        add(method, pattern, DEFAULT_MAX_REQUEST_BODY, handler, queryParams);
+    }
+
+    /**
+     * Registers a route whose body is an uploaded file rather than a JSON
+     * document, so it accepts up to {@link #MAX_UPLOAD_BODY}.
+     */
+    public void addUpload(String method, String pattern, Handler handler, String... queryParams)
+    {
+        add(method, pattern, MAX_UPLOAD_BODY, handler, queryParams);
+    }
+
+    private void add(String method, String pattern, int maxRequestBody, Handler handler, String... queryParams)
+    {
         // declaration order is the specification's order, which reads better in
         // the error message than an alphabetical list would
         var permitted = new LinkedHashSet<>(List.of(queryParams));
 
-        routes.add(new Route(method, split(pattern), permitted, request -> {
+        routes.add(new Route(method, split(pattern), permitted, maxRequestBody, request -> {
             rejectUnknownQueryParams(request, permitted);
             return handler.handle(request);
         }));
@@ -53,7 +89,7 @@ public class Router
                 continue;
             pathMatched = true;
             if (route.method().equals(method))
-                return new Match(route.handler(), params);
+                return new Match(route.handler(), params, route.maxRequestBody());
         }
 
         if (pathMatched)

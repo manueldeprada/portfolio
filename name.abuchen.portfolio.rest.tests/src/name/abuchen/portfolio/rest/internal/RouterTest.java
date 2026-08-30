@@ -37,6 +37,23 @@ public class RouterTest
         }
     }
 
+    /**
+     * The body limit belongs to the route, so the server can read it only after
+     * matching - which is why it travels on the match rather than being one
+     * number for the whole server.
+     */
+    @Test
+    public void testTheBodyLimitIsTheMatchedRoutes()
+    {
+        var router = new Router();
+        router.add("POST", "/v1/files/{file}/transactions", request -> Response.noContent());
+        router.addUpload("POST", "/v1/files/{file}/imports", request -> Response.noContent());
+
+        assertThat(router.match("POST", "/v1/files/abc/transactions").maxRequestBody(),
+                        is(Router.DEFAULT_MAX_REQUEST_BODY));
+        assertThat(router.match("POST", "/v1/files/abc/imports").maxRequestBody(), is(Router.MAX_UPLOAD_BODY));
+    }
+
     @Test
     public void testWrongMethodThrows405()
     {

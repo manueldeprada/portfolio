@@ -102,6 +102,11 @@ info:
     - **Bounded request body.** A body larger than 1 MiB is rejected
       `413 request-too-large` without being read to the end. Every legitimate
       request is far smaller; the limit exists because bodies are buffered whole.
+      The two operations whose body **is an uploaded file** — `createImport` and
+      `previewCsvColumns` — accept up to **16 MiB** instead: that reasoning is
+      about JSON documents a client composes, and a year of bank statements is
+      legitimately larger. The limit is enforced the same way, by reading one
+      byte past it rather than by trusting `Content-Length`.
     - **Per-file access.** Only files the user has individually enabled are visible.
       A file that exists but is not enabled answers exactly like one that does not
       exist (`404 not-found`) — the token must not let a client enumerate files the
@@ -1756,7 +1761,9 @@ paths:
         rendering of the items and applies them by **index**.
 
         The body is the file itself, not a multipart form: the API takes one
-        file per import, and the content type is whatever the file is.
+        file per import, and the content type is whatever the file is. Up to
+        **16 MiB**, rather than the 1 MiB every JSON endpoint is held to;
+        anything larger is `413 request-too-large`.
 
         A `.csv` upload has no format of its own to auto-detect, so the
         column mapping has to be named rather than guessed — one of `config`
@@ -1883,6 +1890,9 @@ paths:
         wrong character; build the mapping against what `createImport` will
         actually see once posted with the real `delimiter`/`encoding`/
         `skipLines` in the same JSON.
+
+        The body is the `.csv` file itself, up to **16 MiB** like
+        `createImport`, rather than the 1 MiB every JSON endpoint is held to.
 
         Each field's `formats` lists the format codes `createImport`'s
         `mapping.columns[].format` accepts for that field (a date field's

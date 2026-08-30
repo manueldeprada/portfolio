@@ -44,6 +44,8 @@ public class RestApiServerTest
                         request -> Response.json(201, JsonParser.parseString("{\"status\":\"pending\"}")));
         router.add("GET", "/v1/auth/requests/{id}",
                         request -> Response.json(200, JsonParser.parseString("{\"status\":\"pending\"}")));
+        router.addUpload("POST", "/v1/upload",
+                        request -> Response.json(201, JsonParser.parseString("{\"bytes\":" + request.body().length + "}")));
 
         server = new RestApiServer(0, TOKEN::equals, router);
         server.start();
@@ -268,6 +270,32 @@ public class RestApiServerTest
                         .POST(HttpRequest.BodyPublishers.ofByteArray(new byte[1024 * 1024])).build(),
                         HttpResponse.BodyHandlers.ofString());
         assertThat(response.statusCode(), is(201));
+    }
+
+    /**
+     * The limit is the matched route's, not one number for the whole server: a
+     * route whose body is an uploaded bank statement takes what the 1 MiB
+     * reasoning (JSON documents a client composes) does not cover.
+     */
+    @Test
+    public void testAnUploadRouteAcceptsABodyTheJsonRoutesWouldReject() throws Exception
+    {
+        var response = http.send(request("/v1/upload").header("Authorization", "Bearer " + TOKEN)
+                        .POST(HttpRequest.BodyPublishers.ofByteArray(new byte[2 * 1024 * 1024])).build(),
+                        HttpResponse.BodyHandlers.ofString());
+        assertThat(response.statusCode(), is(201));
+        assertThat(response.body(), containsString(String.valueOf(2 * 1024 * 1024)));
+    }
+
+    /** ...and is still bounded, one byte past the limit rather than by Content-Length */
+    @Test
+    public void testAnUploadRouteStillRejectsABodyPastItsOwnLimit() throws Exception
+    {
+        var response = http.send(request("/v1/upload").header("Authorization", "Bearer " + TOKEN)
+                        .POST(HttpRequest.BodyPublishers.ofByteArray(new byte[17 * 1024 * 1024])).build(),
+                        HttpResponse.BodyHandlers.ofString());
+        assertThat(response.statusCode(), is(413));
+        assertThat(response.body(), containsString("problems/request-too-large"));
     }
 
     @Test

@@ -235,13 +235,15 @@ public final class ApiRoutes
         // live model references and cannot round-trip through JSON. The extraction
         // is a write in the sense that matters here: it must not run while the user
         // has a dialog open, and it creates the securities a later apply will add.
-        router.add("POST", "/v1/files/{file}/imports", write(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
+        // ... and the body of both is the uploaded file itself, so they take the
+        // upload limit rather than the JSON one every other route lives within
+        router.addUpload("POST", "/v1/files/{file}/imports", write(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
                         (file, req) -> Response.json(201, ImportsHandler.extract(file.getClient(),
                                         file.getPath(), req.queryParam("filename"), req.body(), //$NON-NLS-1$
                                         req.queryParam("config"), req.queryParam("mapping"), //$NON-NLS-1$ //$NON-NLS-2$
                                         "true".equals(req.queryParam("save"))))), //$NON-NLS-1$ //$NON-NLS-2$
                         "filename", "config", "mapping", "save"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
-        router.add("POST", "/v1/files/{file}/imports/csv-preview", write(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
+        router.addUpload("POST", "/v1/files/{file}/imports/csv-preview", write(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
                         (file, req) -> Response.json(200, ImportsHandler.previewCsv(file.getClient(),
                                         req.queryParam("filename"), req.body()))), //$NON-NLS-1$
                         "filename"); //$NON-NLS-1$
