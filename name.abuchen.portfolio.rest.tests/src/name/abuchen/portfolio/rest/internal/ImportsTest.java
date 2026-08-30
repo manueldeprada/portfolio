@@ -21,10 +21,12 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
+import name.abuchen.portfolio.Messages;
 import name.abuchen.portfolio.junit.AccountBuilder;
 import name.abuchen.portfolio.junit.PortfolioBuilder;
 import name.abuchen.portfolio.model.Account;
 import name.abuchen.portfolio.model.Client;
+import name.abuchen.portfolio.util.TextUtil;
 
 /**
  * The import pipeline end to end, driven with a minimal Interactive Brokers
@@ -432,6 +434,30 @@ public class ImportsTest
             assertThat(field.has("optional"), is(true));
             assertThat(field.has("formats"), is(true));
         }
+    }
+
+    @Test
+    public void testCsvPreviewReadsAFileWhoseRowsAreShorterThanItsHeader()
+    {
+        // A row that omits its trailing empty columns is shorter than the header,
+        // which is what most exports produce for an empty last field. Auto-detection
+        // samples each column's first non-empty value, and that read was unguarded,
+        // so the whole preview died with an ArrayIndexOutOfBoundsException reported
+        // as a bare 500.
+        var client = fixture();
+
+        // the header names two columns auto-detection recognizes (whatever this
+        // JVM's locale calls them), so it does sample their values; the preview
+        // reads with the importer's own default delimiter, which is locale-derived
+        var d = String.valueOf(TextUtil.getListSeparatorChar());
+        var csv = Messages.CSVColumn_Date + d + Messages.CSVColumn_Value + "\n" //
+                        + "2026-08-24\n" //
+                        + "2026-08-25" + d + "100.00\n";
+
+        var preview = ImportsHandler.previewCsv(client, "depot.csv", csv.getBytes(StandardCharsets.UTF_8));
+
+        assertThat(preview.getAsJsonArray("columns").size(), is(2));
+        assertThat(preview.getAsJsonArray("sampleRows").size(), is(2));
     }
 
     @Test

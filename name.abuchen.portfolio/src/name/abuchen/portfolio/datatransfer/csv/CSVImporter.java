@@ -1163,8 +1163,13 @@ public final class CSVImporter
     }
 
     /**
-     * Finds the first value that is not empty for the given column.
-     * 
+     * Finds the first value that is not empty for the given column. A row that
+     * does not reach the column is skipped rather than read: commons-csv gives
+     * every record its own arity, so a data row whose trailing empty columns
+     * were simply omitted - a very common shape - is shorter than the header
+     * that named the column. {@code CSVExtractor#getText} already treats a
+     * column past the end of a row as absent, and so does this.
+     *
      * @param column
      *            {@link Column}
      * @return value on success, else null
@@ -1174,6 +1179,9 @@ public final class CSVImporter
         int index = column.getColumnIndex();
         for (String[] rawValues : values)
         {
+            if (index < 0 || index >= rawValues.length)
+                continue;
+
             String value = rawValues[index];
             // check if value is set and is not empty (ignore whitespace)
             if ((value != null) && (!value.trim().isEmpty()))

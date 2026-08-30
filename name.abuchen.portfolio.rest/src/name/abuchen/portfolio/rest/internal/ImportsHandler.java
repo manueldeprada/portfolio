@@ -140,7 +140,21 @@ public final class ImportsHandler
             Files.write(spooled.toPath(), content);
 
             var importer = new CSVImporter(client, spooled);
-            importer.processFile(true);
+            try
+            {
+                importer.processFile(true);
+            }
+            catch (RuntimeException e)
+            {
+                // Reading the header and auto-detecting a mapping is parsing, and a
+                // file that cannot be parsed is the caller's, not a server fault: it
+                // is reported as a validation error naming the upload rather than as
+                // an internal error the caller can do nothing with. IOException is
+                // still an internal error - that one is the server's own temporary
+                // file failing, not the content.
+                throw ApiException.validation(List.of(new ApiException.FieldError("file", "invalid-value",
+                                "the uploaded file could not be read as CSV: " + e)));
+            }
 
             var json = new JsonObject();
 
