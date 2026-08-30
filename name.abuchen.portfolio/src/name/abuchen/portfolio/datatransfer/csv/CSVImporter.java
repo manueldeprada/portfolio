@@ -555,16 +555,93 @@ public final class CSVImporter
             return FORMATS;
         }
 
+        /**
+         * Guesses the decimal separator convention from the given value rather
+         * than from the reader's own locale. Nothing ties a CSV's number format
+         * to the machine reading it, and both readings of an amount parse: a
+         * "100.00" read with the comma convention has its dot discarded as a
+         * grouping separator and becomes 10000, with no error to notice.
+         *
+         * @param value
+         *            example value from the current file; can be null
+         * @return the format the value is written in, or the default locale's
+         *         convention when the value carries no evidence either way
+         */
         @Override
         public FieldFormat guessFormat(Client client, String value)
         {
-            if (TextUtil.DECIMAL_SEPARATOR == ',')
+            var separator = decimalSeparatorOf(value);
+
+            if (separator == ',')
                 return FORMATS.get(0);
-            if (TextUtil.DECIMAL_SEPARATOR == '.')
+            if (separator == '.')
                 return FORMATS.get(1);
 
-            // fallback
-            return FORMATS.get(0);
+            // the value says nothing: the reader's own locale is all that is
+            // left, which is what this used to go by unconditionally
+            return TextUtil.DECIMAL_SEPARATOR == '.' ? FORMATS.get(1) : FORMATS.get(0);
+        }
+
+        /**
+         * The decimal separator the value is written with, or {@code 0} when it
+         * does not say. Everything that is neither a digit nor one of the two
+         * separators is ignored, exactly as {@link AmountFormat} ignores it, so
+         * a currency symbol, a sign or an apostrophe group changes nothing.
+         * <p>
+         * The rules, in order:
+         * <ul>
+         * <li>both separators present: the last one is the decimal separator
+         * ("1.234,56" a comma, "1,234.56" a dot); the other one groups.</li>
+         * <li>one separator, occurring more than once: it can only be grouping,
+         * so the other one is the decimal separator ("1,234,567").</li>
+         * <li>one separator, once, with anything other than exactly three
+         * digits after it: a decimal separator - no grouping convention
+         * produces "100.00" or "1.2345".</li>
+         * <li>one separator, once, exactly three digits after it and none or
+         * more than three before it: no grouping convention produces that
+         * either ("1234.567"), so again a decimal separator.</li>
+         * <li>one separator, once, exactly three digits after it and one to
+         * three before it: genuinely ambiguous - "1,234" is either 1234 or
+         * 1.234, and the value alone cannot say which. The tie-break is to
+         * decide nothing and let the caller fall back to the default locale,
+         * which is right whenever the file was written where it is read and no
+         * worse than a guess otherwise.</li>
+         * </ul>
+         */
+        private static char decimalSeparatorOf(String value)
+        {
+            if (value == null)
+                return 0;
+
+            var lastDot = value.lastIndexOf('.');
+            var lastComma = value.lastIndexOf(',');
+
+            if (lastDot < 0 && lastComma < 0)
+                return 0;
+            if (lastDot >= 0 && lastComma >= 0)
+                return lastDot > lastComma ? '.' : ',';
+
+            var candidate = lastDot >= 0 ? '.' : ',';
+            var other = lastDot >= 0 ? ',' : '.';
+            var position = Math.max(lastDot, lastComma);
+
+            if (value.indexOf(candidate) != position)
+                return other;
+
+            if (countDigits(value, position + 1, 1) != 3)
+                return candidate;
+
+            var digitsBefore = countDigits(value, position - 1, -1);
+            return digitsBefore >= 1 && digitsBefore <= 3 ? 0 : candidate;
+        }
+
+        /** Counts the digits running from {@code from} in the {@code step} direction. */
+        private static int countDigits(String value, int from, int step)
+        {
+            var count = 0;
+            for (var ii = from; ii >= 0 && ii < value.length() && Character.isDigit(value.charAt(ii)); ii += step)
+                count++;
+            return count;
         }
 
         @Override

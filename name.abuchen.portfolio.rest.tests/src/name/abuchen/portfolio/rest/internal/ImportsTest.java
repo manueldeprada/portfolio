@@ -645,8 +645,67 @@ public class ImportsTest
                         .map(JsonElement::getAsJsonObject)
                         .filter(item -> item.has("date"))
                         .findFirst().orElseThrow();
+        //
+        // The amount asserted here used to be 10000, which was this very machine's
+        // locale reading the file wrong: "100.00" parsed with the comma convention
+        // drops the dot as a grouping separator and books 10000.00. See
+        // testAnAmountIsReadWithTheFilesOwnDecimalConventionNotTheServersLocale.
         assertThat(transactionItem.get("date").getAsString(), is("2026-08-24T00:00"));
-        assertThat(transactionItem.getAsJsonObject("amount").get("value").getAsInt(), is(10000));
+        assertThat(transactionItem.getAsJsonObject("amount").get("value").getAsInt(), is(100));
+    }
+
+    @Test
+    public void testAnAmountIsReadWithTheFilesOwnDecimalConventionNotTheServersLocale()
+    {
+        // AmountField#guessFormat ignored the sample value entirely and returned the
+        // format for the JVM's default locale, so a column with no explicit "format"
+        // was parsed with the server's decimal convention rather than the file's. Both
+        // readings parse - AmountFormat discards the separator it was not told about as
+        // a grouping separator - so a dot-decimal "100.00" read by a comma-locale daemon
+        // booked 10000.00 with no error anywhere. Asserting both conventions in one test
+        // is what makes it a regression test on any JVM locale: before the fix exactly
+        // one of the two was off by a factor of a thousand, whichever one this runs under.
+        assertThat(amountOf(extractWithoutFormats(",", "100.00")), is(100L));
+        assertThat(amountOf(extractWithoutFormats(";", "100,00")), is(100L));
+    }
+
+    /** Extracts one purchase whose amount is written with the given separator. */
+    private static JsonObject extractWithoutFormats(String delimiter, String amount)
+    {
+        var mapping = """
+                        {
+                          "label": "No Explicit Formats",
+                          "target": "portfolio",
+                          "delimiter": "%s",
+                          "encoding": "UTF-8",
+                          "skipLines": 0,
+                          "isFirstLineHeader": true,
+                          "columns": [
+                            {"label": "date", "field": "date"},
+                            {"label": "type", "field": "type"},
+                            {"label": "name", "field": "name"},
+                            {"label": "shares", "field": "shares"},
+                            {"label": "value", "field": "value"}
+                          ]
+                        }
+                        """.formatted(delimiter);
+
+        var csv = String.join(delimiter, "date", "type", "name", "shares", "value") + "\n"
+                        + String.join(delimiter, "2026-08-24", "BUY", "Apple Inc.", "1", amount) + "\n";
+
+        return ImportsHandler.extract(fixture(), "/tmp/test.portfolio", "buy.csv",
+                        csv.getBytes(StandardCharsets.UTF_8), null, mapping, false);
+    }
+
+    /** The amount of the one item that carries one, as the decimal the API reports. */
+    private static long amountOf(JsonObject preview)
+    {
+        assertThat(preview.toString(), preview.getAsJsonArray("errors").size(), is(0));
+        return preview.getAsJsonArray("items").asList().stream() //
+                        .map(JsonElement::getAsJsonObject) //
+                        .filter(item -> item.has("amount")) //
+                        .findFirst().orElseThrow() //
+                        .getAsJsonObject("amount").get("value").getAsLong();
     }
 
     @Test
