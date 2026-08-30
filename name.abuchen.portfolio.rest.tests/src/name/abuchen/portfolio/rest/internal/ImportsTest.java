@@ -2,6 +2,7 @@ package name.abuchen.portfolio.rest.internal;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.contains;
+import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.is;
@@ -530,6 +531,45 @@ public class ImportsTest
         {
             assertThat(e.getStatus(), is(422));
             assertThat(e.getErrors().get(0).field(), is("mapping"));
+        }
+    }
+
+    @Test
+    public void testAMappingNamingAnEncodingThisJvmDoesNotHaveIsRejected()
+    {
+        // CSVConfig#fromJSON used to swallow the charset failure and fall back to
+        // the platform default, so a client naming an encoding the server does not
+        // have silently got the server's own - and reading a file with the wrong
+        // charset does not fail, it produces mojibake, which nothing downstream
+        // reports either.
+        var client = fixture();
+
+        var mapping = """
+                        {
+                          "label": "Bad Encoding",
+                          "target": "portfolio",
+                          "delimiter": ";",
+                          "encoding": "NO-SUCH-CHARSET-42",
+                          "skipLines": 0,
+                          "isFirstLineHeader": true,
+                          "columns": [
+                            {"label": "Bezeichnung", "field": "name"}
+                          ]
+                        }
+                        """;
+
+        try
+        {
+            ImportsHandler.extract(client, "/tmp/test.portfolio", "depot.csv",
+                            SECURITIES_CSV.getBytes(StandardCharsets.UTF_8), null, mapping, false);
+            Assert.fail("expected a validation error");
+        }
+        catch (ApiException e)
+        {
+            assertThat(e.getStatus(), is(422));
+            assertThat(e.getErrors().get(0).field(), is("mapping.encoding"));
+            assertThat(e.getErrors().get(0).code(), is("invalid-value"));
+            assertThat(e.getErrors().get(0).message(), containsString("NO-SUCH-CHARSET-42"));
         }
     }
 

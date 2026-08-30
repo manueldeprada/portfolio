@@ -1770,7 +1770,11 @@ paths:
         `label` (the header text; cosmetic, kept for round-tripping) and
         optional `field` (a code from the matching target's `fields` in the
         preview) and `format` (a code from that field's `formats`); a column
-        with no `field` is left unmapped. Add `save=true` to keep it under its
+        with no `field` is left unmapped. An `encoding` this server's JVM does
+        not provide is refused `422` on `mapping.encoding` rather than
+        substituted: reading a file with the wrong charset does not fail, it
+        produces mojibake, so a silent substitution would be invisible. Add
+        `save=true` to keep it under its
         own `label` for later reuse by `config` — kept in memory for the
         life of the server process, not written to a file, so it does not
         survive a restart and is not shared between server instances; a

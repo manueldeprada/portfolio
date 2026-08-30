@@ -2,6 +2,8 @@ package name.abuchen.portfolio.rest.internal;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.charset.IllegalCharsetNameException;
+import java.nio.charset.UnsupportedCharsetException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -398,6 +400,19 @@ public final class ImportsHandler
             config.fromJSON(json);
             return config;
         }
+        // The two charset failures are named separately from the catch-all below
+        // because the offending field is knowable here: reading a file with the
+        // wrong charset does not fail, it produces mojibake, so a caller that
+        // named an encoding has to be told the one it named was refused rather
+        // than discover afterwards that the server used its own.
+        catch (IllegalCharsetNameException e)
+        {
+            throw unknownEncoding(e.getCharsetName());
+        }
+        catch (UnsupportedCharsetException e)
+        {
+            throw unknownEncoding(e.getCharsetName());
+        }
         catch (ParseException | RuntimeException e)
         {
             if (e instanceof ApiException apiException)
@@ -405,6 +420,12 @@ public final class ImportsHandler
             throw ApiException.validation(List.of(new ApiException.FieldError("mapping", "invalid-value",
                             String.valueOf(e.getMessage()))));
         }
+    }
+
+    private static ApiException unknownEncoding(String charsetName)
+    {
+        return ApiException.validation(List.of(new ApiException.FieldError("mapping.encoding", "invalid-value",
+                        "this server's JVM does not provide the charset \"" + charsetName + "\"")));
     }
 
     private static List<Extractor.Item> extractCsv(Client client, File file, CSVConfig config,
