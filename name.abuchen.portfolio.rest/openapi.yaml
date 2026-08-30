@@ -2172,6 +2172,12 @@ paths:
         was named: a half-applied import would leave the file in a state nobody
         chose. The session is discarded once applied, so a replay is a `404`
         rather than a second import.
+
+        An `investment-vehicle-price` extraction is the one exception to all of
+        that, because its items are not transactions: they are quotes with no
+        instrument of their own. It needs no accounts and takes `security`
+        instead, the instrument its prices are merged into, and answers with
+        `pricesAdded` alongside `imported`.
       requestBody:
         required: true
         content:
@@ -2191,6 +2197,13 @@ paths:
                     type: integer
                   instrumentsCreated:
                     type: integer
+                  pricesAdded:
+                    type: integer
+                    description: |
+                      Present for an `investment-vehicle-price` import only: how
+                      many prices the named instrument actually gained or had
+                      replaced. `imported` counts items, and such an extraction
+                      is a single item however many prices it carries.
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -4162,6 +4175,18 @@ components:
         portfolio:
           type: string
           description: UUID of the investment account for items that hold a position.
+        security:
+          type: string
+          description: |
+            UUID of the instrument an `investment-vehicle-price` extraction's
+            prices belong to. **Required** for that target and rejected
+            `not-applicable` for every other, where the items name their own
+            instruments. The extractor produces prices with no instrument of
+            their own — a nameless placeholder that exists only to carry them —
+            so this is the same choice the desktop wizard puts on its own
+            "select security" page for this one target. Prices are merged, not
+            appended: one already on record for the same date is replaced, so
+            re-applying an overlapping range changes nothing.
         convertBuySellToDelivery:
           type: boolean
           description: |

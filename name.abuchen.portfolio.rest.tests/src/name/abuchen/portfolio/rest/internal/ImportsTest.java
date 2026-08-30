@@ -25,6 +25,7 @@ import com.google.gson.JsonParser;
 import name.abuchen.portfolio.Messages;
 import name.abuchen.portfolio.junit.AccountBuilder;
 import name.abuchen.portfolio.junit.PortfolioBuilder;
+import name.abuchen.portfolio.junit.SecurityBuilder;
 import name.abuchen.portfolio.model.Account;
 import name.abuchen.portfolio.model.Client;
 import name.abuchen.portfolio.util.TextUtil;
@@ -990,6 +991,156 @@ public class ImportsTest
 
         assertThat(preview.getAsJsonArray("items").size(), is(0));
         assertThat(JsonParser.parseString(preview.toString()).getAsJsonObject().has("errors"), is(true));
+    }
+
+    private static final String PRICE_MAPPING = """
+                    {
+                      "label": "Quotes",
+                      "target": "investment-vehicle-price",
+                      "delimiter": ",",
+                      "encoding": "UTF-8",
+                      "skipLines": 0,
+                      "isFirstLineHeader": true,
+                      "columns": [
+                        {"label": "date", "field": "date"},
+                        {"label": "close", "field": "quote"}
+                      ]
+                    }
+                    """;
+
+    private static final String PRICES_CSV = "date,close\n2026-08-24,100.00\n2026-08-25,101.50\n";
+
+    private static JsonObject extractPrices(Client client, String csv)
+    {
+        return ImportsHandler.extract(client, "/tmp/test.portfolio", "quotes.csv",
+                        csv.getBytes(StandardCharsets.UTF_8), null, PRICE_MAPPING, false);
+    }
+
+    private static JsonObject priceApplyBody(JsonObject preview, String securityUuid)
+    {
+        var body = new JsonObject();
+        body.add("items", indices(preview));
+        if (securityUuid != null)
+            body.addProperty("security", securityUuid);
+        return body;
+    }
+
+    @Test
+    public void testASecurityPriceImportMergesIntoTheNamedInstrument()
+    {
+        // Before this, the investment-vehicle-price target was broken end to end
+        // over REST: its extractor returns a nameless, currency-less placeholder
+        // security that exists only to carry the prices, and applying it through
+        // InsertAction added that placeholder to the file as an instrument. The
+        // desktop wizard special-cases the target and merges into an instrument
+        // the user picks; there was nowhere to name one here.
+        var client = fixture();
+        var instrument = new SecurityBuilder().addTo(client);
+        var securitiesBefore = client.getSecurities().size();
+
+        var preview = extractPrices(client, PRICES_CSV);
+        var session = ImportSessions.get("/tmp/test.portfolio", preview.get("id").getAsString());
+
+        var result = ImportsHandler.apply(client, session, priceApplyBody(preview, instrument.getUUID()));
+
+        assertThat(result.entity().getAsJsonObject().get("pricesAdded").getAsInt(), is(2));
+        assertThat(client.getSecurities().size(), is(securitiesBefore));
+
+        var dates = instrument.getPrices().stream().map(p -> p.getDate().toString()).toList();
+        assertThat(dates, hasItem("2026-08-24"));
+        assertThat(dates, hasItem("2026-08-25"));
+    }
+
+    @Test
+    public void testASecurityPriceImportWithoutAnInstrumentIsRefused()
+    {
+        var client = fixture();
+        new SecurityBuilder().addTo(client);
+
+        var preview = extractPrices(client, PRICES_CSV);
+        var session = ImportSessions.get("/tmp/test.portfolio", preview.get("id").getAsString());
+
+        try
+        {
+            ImportsHandler.apply(client, session, priceApplyBody(preview, null));
+            Assert.fail("expected a validation error");
+        }
+        catch (ApiException e)
+        {
+            assertThat(e.getStatus(), is(422));
+            assertThat(e.getErrors().get(0).field(), is("security"));
+            assertThat(e.getErrors().get(0).code(), is("required"));
+        }
+
+        // and, since nothing is applied, the placeholder is not in the file either
+        assertThat(client.getSecurities().size(), is(1));
+    }
+
+    @Test
+    public void testAnUnknownInstrumentOnAPriceImportIsRefused()
+    {
+        var client = fixture();
+        var preview = extractPrices(client, PRICES_CSV);
+        var session = ImportSessions.get("/tmp/test.portfolio", preview.get("id").getAsString());
+
+        try
+        {
+            ImportsHandler.apply(client, session, priceApplyBody(preview, "no-such-uuid"));
+            Assert.fail("expected a validation error");
+        }
+        catch (ApiException e)
+        {
+            assertThat(e.getErrors().get(0).field(), is("security"));
+            assertThat(e.getErrors().get(0).code(), is("unknown-reference"));
+        }
+    }
+
+    @Test
+    public void testNamingAnInstrumentOnAnOrdinaryImportIsRefused()
+    {
+        // every other extraction's items name their own instrument, so a single
+        // override would be meaningless rather than merely ignored
+        var client = fixture();
+        var instrument = new SecurityBuilder().addTo(client);
+
+        var preview = extract(client, "flex.xml", FLEX_STATEMENT);
+        var session = ImportSessions.get("/tmp/test.portfolio", preview.get("id").getAsString());
+
+        var body = priceApplyBody(preview, instrument.getUUID());
+        var accounts = new JsonObject();
+        accounts.addProperty("USD", account(client).getUUID());
+        body.add("accounts", accounts);
+
+        try
+        {
+            ImportsHandler.apply(client, session, body);
+            Assert.fail("expected a validation error");
+        }
+        catch (ApiException e)
+        {
+            assertThat(e.getErrors().get(0).field(), is("security"));
+            assertThat(e.getErrors().get(0).code(), is("not-applicable"));
+        }
+    }
+
+    @Test
+    public void testReapplyingAnOverlappingPriceRangeChangesNothing()
+    {
+        var client = fixture();
+        var instrument = new SecurityBuilder().addTo(client);
+
+        var first = extractPrices(client, PRICES_CSV);
+        ImportsHandler.apply(client, ImportSessions.get("/tmp/test.portfolio", first.get("id").getAsString()),
+                        priceApplyBody(first, instrument.getUUID()));
+        var afterFirst = instrument.getPrices().size();
+
+        var second = extractPrices(client, PRICES_CSV);
+        var result = ImportsHandler.apply(client,
+                        ImportSessions.get("/tmp/test.portfolio", second.get("id").getAsString()),
+                        priceApplyBody(second, instrument.getUUID()));
+
+        assertThat(result.entity().getAsJsonObject().get("pricesAdded").getAsInt(), is(0));
+        assertThat(instrument.getPrices().size(), is(afterFirst));
     }
 
     @Test

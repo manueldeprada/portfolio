@@ -41,6 +41,7 @@ import name.abuchen.portfolio.datatransfer.pdf.PDFImportAssistant;
 import name.abuchen.portfolio.model.Account;
 import name.abuchen.portfolio.model.Client;
 import name.abuchen.portfolio.model.Portfolio;
+import name.abuchen.portfolio.model.Security;
 import name.abuchen.portfolio.money.Values;
 
 /**
@@ -448,7 +449,8 @@ public final class ImportsHandler
             }
 
             var session = ImportSessions.create(fileId, fileName, items,
-                            errors.stream().map(ImportsHandler::describe).toList());
+                            errors.stream().map(ImportsHandler::describe).toList(),
+                            csvConfig == null ? null : csvConfig.getTarget());
             return preview(client, session);
         }
         catch (IOException e)
@@ -742,8 +744,9 @@ public final class ImportsHandler
         var indices = readIndices(body, session.items().size(), errors);
         var accounts = readAccounts(client, body, errors);
         var portfolio = readPortfolio(client, body, errors);
-        var convertBuySellToDelivery = readFlag(body, "convertBuySellToDelivery", errors);
-        var skipDividends = readFlag(body, "skipDividends", errors);
+        var convertBuySellToDelivery = readFlag(body, "convertBuySellToDelivery", errors, false);
+        var skipDividends = readFlag(body, "skipDividends", errors, false);
+        var security = readSecurity(client, session, body, errors);
 
         var selected = new ArrayList<Extractor.Item>();
         for (var index : indices)
@@ -767,6 +770,9 @@ public final class ImportsHandler
         if (!errors.isEmpty())
             throw ApiException.validation(errors);
 
+        if (session.isSecurityPriceImport())
+            return applyPrices(client, session, selected, security);
+
         var action = new InsertAction(client);
         action.setConvertBuySellToDelivery(convertBuySellToDelivery);
         action.setRemoveDividends(skipDividends);
@@ -784,6 +790,87 @@ public final class ImportsHandler
         json.addProperty("imported", selected.size());
         json.addProperty("instrumentsCreated", client.getSecurities().size() - securitiesBefore);
         return new ApplyResult(json, selected.size(), client.getSecurities().size() - securitiesBefore);
+    }
+
+    /**
+     * Merges an {@code investment-vehicle-price} extraction into the instrument
+     * the caller named, which is what the desktop's own CSV wizard does with
+     * this target ({@code CSVImportWizard#performFinish} then
+     * {@code importSecurityPrices}, with the instrument chosen on
+     * {@code SelectSecurityPage}). The extractor returns a nameless,
+     * currency-less placeholder security that exists only to carry the prices,
+     * so booking the items the ordinary way would add that placeholder to the
+     * file as an instrument - which is what this endpoint did before there was
+     * anywhere to name the real one.
+     * <p>
+     * {@code Security#addPrice} replaces a price already on record for the same
+     * date and reports whether anything changed, so re-applying an overlapping
+     * range is idempotent rather than duplicating.
+     */
+    private static ApplyResult applyPrices(Client client, ImportSessions.Session session,
+                    List<Extractor.Item> selected, Security security)
+    {
+        var added = 0;
+        for (var item : selected)
+        {
+            if (item.getSecurity() == null)
+                continue;
+
+            for (var price : item.getSecurity().getPrices())
+                if (security.addPrice(price))
+                    added++;
+        }
+
+        client.markDirty();
+        ImportSessions.discard(session.id());
+
+        var json = new JsonObject();
+        json.addProperty("imported", selected.size());
+        json.addProperty("instrumentsCreated", 0);
+        json.addProperty("pricesAdded", added);
+        return new ApplyResult(json, selected.size(), 0);
+    }
+
+    /**
+     * The instrument a security-price extraction is merged into. Required for
+     * that one target, because its items are prices with no instrument of their
+     * own, and refused for every other, where the items name their own
+     * instruments and a single override would be meaningless.
+     */
+    private static Security readSecurity(Client client, ImportSessions.Session session, JsonObject body,
+                    List<ApiException.FieldError> errors)
+    {
+        var element = body.get("security");
+        var given = element != null && !element.isJsonNull();
+
+        if (!session.isSecurityPriceImport())
+        {
+            if (given)
+                errors.add(new ApiException.FieldError("security", "not-applicable",
+                                "only an " + ImportSessions.SECURITY_PRICE_TARGET
+                                                + " import is merged into one instrument"));
+            return null;
+        }
+
+        if (!given)
+        {
+            errors.add(new ApiException.FieldError("security", "required",
+                            "an " + ImportSessions.SECURITY_PRICE_TARGET
+                                            + " import names the instrument its prices belong to"));
+            return null;
+        }
+
+        if (!element.isJsonPrimitive() || !element.getAsJsonPrimitive().isString())
+        {
+            errors.add(new ApiException.FieldError("security", "invalid-type", "security must be a uuid"));
+            return null;
+        }
+
+        var uuid = element.getAsString();
+        var security = client.getSecurities().stream().filter(s -> uuid.equals(s.getUUID())).findAny().orElse(null);
+        if (security == null)
+            errors.add(new ApiException.FieldError("security", "unknown-reference", "no such instrument"));
+        return security;
     }
 
     private static List<Integer> readIndices(JsonObject body, int count, List<ApiException.FieldError> errors)
@@ -869,15 +956,16 @@ public final class ImportsHandler
         return portfolio;
     }
 
-    private static boolean readFlag(JsonObject body, String field, List<ApiException.FieldError> errors)
+    private static boolean readFlag(JsonObject body, String field, List<ApiException.FieldError> errors,
+                    boolean fallback)
     {
         var element = body.get(field);
         if (element == null || element.isJsonNull())
-            return false;
+            return fallback;
         if (!element.isJsonPrimitive() || !element.getAsJsonPrimitive().isBoolean())
         {
             errors.add(new ApiException.FieldError(field, "invalid-type", field + " must be true or false"));
-            return false;
+            return fallback;
         }
         return element.getAsBoolean();
     }

@@ -26,9 +26,29 @@ public final class ImportSessions
     /** Long enough for a person to read a preview, short enough not to pin a file's model. */
     private static final Duration TTL = Duration.ofMinutes(30);
 
+    /**
+     * The one CSV target whose items are not transactions to book but prices to
+     * merge into an instrument the caller names. Its extractor returns a single
+     * {@code SecurityItem} carrying a nameless, currency-less placeholder
+     * security that exists only to hold them.
+     */
+    public static final String SECURITY_PRICE_TARGET = "investment-vehicle-price"; //$NON-NLS-1$
+
+    /**
+     * @param csvTarget
+     *            the CSV target the extraction was read with, or {@code null}
+     *            for a PDF or Flex statement. Kept because what an apply has to
+     *            do with the items depends on it, and the items themselves
+     *            cannot say: a security-price extraction and one that creates
+     *            an instrument both produce a {@code SecurityItem}.
+     */
     public record Session(String id, String fileId, String fileName, List<Extractor.Item> items,
-                    List<String> extractionErrors, Instant createdAt)
+                    List<String> extractionErrors, String csvTarget, Instant createdAt)
     {
+        public boolean isSecurityPriceImport()
+        {
+            return SECURITY_PRICE_TARGET.equals(csvTarget);
+        }
     }
 
     private static final Map<String, Session> SESSIONS = new ConcurrentHashMap<>();
@@ -38,12 +58,12 @@ public final class ImportSessions
     }
 
     public static Session create(String fileId, String fileName, List<Extractor.Item> items,
-                    List<String> extractionErrors)
+                    List<String> extractionErrors, String csvTarget)
     {
         expire();
 
         var session = new Session(UUID.randomUUID().toString(), fileId, fileName, List.copyOf(items),
-                        List.copyOf(extractionErrors), Instant.now());
+                        List.copyOf(extractionErrors), csvTarget, Instant.now());
         SESSIONS.put(session.id(), session);
         return session;
     }
