@@ -245,8 +245,11 @@ public final class ApiRoutes
                         "filename", "config", "mapping", "save"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
         router.addUpload("POST", "/v1/files/{file}/imports/csv-preview", write(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
                         (file, req) -> Response.json(200, ImportsHandler.previewCsv(file.getClient(),
-                                        req.queryParam("filename"), req.body()))), //$NON-NLS-1$
-                        "filename"); //$NON-NLS-1$
+                                        req.queryParam("filename"), req.body(), //$NON-NLS-1$
+                                        req.queryParam("delimiter"), req.queryParam("encoding"), //$NON-NLS-1$ //$NON-NLS-2$
+                                        req.queryParam("skipLines"), //$NON-NLS-1$
+                                        req.queryParam("isFirstLineHeader")))), //$NON-NLS-1$
+                        "filename", "delimiter", "encoding", "skipLines", "isFirstLineHeader"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
         router.add("GET", "/v1/files/{file}/imports/configs", onUiThread(host, req -> { //$NON-NLS-1$ //$NON-NLS-2$
             resolver.resolve(req.pathParam("file")); //$NON-NLS-1$
             return Response.json(200, ImportsHandler.configs());

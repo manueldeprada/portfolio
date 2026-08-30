@@ -2,6 +2,7 @@ package name.abuchen.portfolio.rest.internal;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.charset.Charset;
 import java.nio.charset.IllegalCharsetNameException;
 import java.nio.charset.UnsupportedCharsetException;
 import java.nio.file.Files;
@@ -114,22 +115,44 @@ public final class ImportsHandler
     }
 
     /**
+     * As below, read with the importer's own defaults for all four parse
+     * settings - which is what a caller naming none of them gets.
+     */
+    public static JsonObject previewCsv(Client client, String fileName, byte[] content)
+    {
+        return previewCsv(client, fileName, content, null, null, null, null);
+    }
+
+    /**
      * The header row, a handful of sample data rows, and the fields every CSV
      * target extractor knows how to fill - everything a client needs to render
      * an interactive column-mapping UI before it commits to a {@code mapping}
-     * on {@code POST .../imports}. Read with the importer's default delimiter,
-     * encoding and header assumptions (a comma-or-semicolon-per-locale
-     * delimiter, the platform default encoding, first line as header): a file
-     * that needs different ones still previews - the columns are then labeled
-     * with whatever the wrong delimiter produced - but its mapping should be
-     * built against the fields it will actually reach after posting to
-     * {@code .../imports} with those settings named explicitly.
+     * on {@code POST .../imports}.
+     * <p>
+     * The four settings that decide how the file is split are the caller's,
+     * because the server cannot infer them and its own defaults are the wrong
+     * ones for half of all callers: {@link CSVImporter}'s delimiter is
+     * {@code TextUtil#getListSeparatorChar}, the <em>server's JVM locale's</em>
+     * list separator, so an English-locale daemon splits on a comma and a
+     * German or Spanish one on a semicolon. A comma-separated file previewed
+     * against a semicolon came back as a single column whose label was the
+     * whole header line, and therefore with a {@code guesses} entry per target
+     * that matched nothing - the application's own auto-detect
+     * (see {@link #guessesFor}) is dead for every file split on the wrong
+     * character, and no client can know or control the server's locale. Each
+     * of the four is optional and each defaults to exactly what the importer
+     * does on its own, so a caller that names none sees the previous behavior.
+     * <p>
+     * They are applied before the file is read, so {@code columns},
+     * {@code sampleRows} and every target's {@code guesses} are all computed on
+     * the split the caller actually intends rather than on one of them.
      * <p>
      * Each target also carries the mapping the application would auto-detect
      * for it - see {@link #guessesFor} - so a client can offer a filled-in
      * mapping to correct rather than an empty one to build.
      */
-    public static JsonObject previewCsv(Client client, String fileName, byte[] content)
+    public static JsonObject previewCsv(Client client, String fileName, byte[] content, String delimiter,
+                    String encoding, String skipLines, String isFirstLineHeader)
     {
         if (fileName == null || fileName.isBlank())
             throw ApiException.badRequest("the filename query parameter names the file being previewed");
@@ -141,6 +164,8 @@ public final class ImportsHandler
                             new ApiException.FieldError("filename", "invalid-value", "only .csv files can be previewed")));
         }
 
+        var settings = parseSettings(delimiter, encoding, skipLines, isFirstLineHeader);
+
         File spooled = null;
         try
         {
@@ -148,6 +173,7 @@ public final class ImportsHandler
             Files.write(spooled.toPath(), content);
 
             var importer = new CSVImporter(client, spooled);
+            settings.applyTo(importer);
             try
             {
                 importer.processFile(true);
@@ -226,6 +252,147 @@ public final class ImportsHandler
             if (spooled != null)
                 deleteQuietly(spooled.toPath());
         }
+    }
+
+    /**
+     * The three delimiters the importer supports, under every spelling a
+     * caller may write. The character itself is the spelling {@link CSVConfig}
+     * already uses for its own {@code delimiter} - a one-character string - and
+     * is therefore the one a client that has a mapping in hand already knows;
+     * the names are for a tab, which has to be written {@code %09} in a query
+     * string and is invisible in every log and error message it passes through,
+     * and are accepted for the other two so the three read alike.
+     */
+    private static final Map<String, Character> DELIMITERS = Map.of( //
+                    ",", ',', "comma", ',', //
+                    ";", ';', "semicolon", ';', //
+                    "\t", '\t', "tab", '\t');
+
+    /**
+     * The four parse settings, each already validated and each {@code null}
+     * where the caller named nothing - which is what leaves the importer's own
+     * default in place rather than overwriting it with a guess.
+     */
+    private record CsvParseSettings(Character delimiter, Charset encoding, Integer skipLines,
+                    Boolean isFirstLineHeader)
+    {
+        void applyTo(CSVImporter importer)
+        {
+            if (delimiter != null)
+                importer.setDelimiter(delimiter);
+            if (encoding != null)
+                importer.setEncoding(encoding);
+            if (skipLines != null)
+                importer.setSkipLines(skipLines);
+            if (isFirstLineHeader != null)
+                importer.setFirstLineHeader(isFirstLineHeader);
+        }
+    }
+
+    /**
+     * Validates all four at once, so a caller that got two of them wrong is
+     * told both rather than one per round trip - the convention every other
+     * validation here follows.
+     * <p>
+     * Nothing is silently substituted. {@link CSVConfig#fromJSON} does replace
+     * an unrecognized delimiter with a semicolon, and that is precisely the
+     * failure this endpoint exists to end: a file read with the wrong
+     * delimiter does not fail, it produces one column, and a caller that named
+     * a delimiter and was quietly given another has no way to see it.
+     */
+    private static CsvParseSettings parseSettings(String delimiter, String encoding, String skipLines,
+                    String isFirstLineHeader)
+    {
+        var errors = new ArrayList<ApiException.FieldError>();
+
+        var parsed = new CsvParseSettings(parseDelimiter(delimiter, errors), parseEncoding(encoding, errors),
+                        parseSkipLines(skipLines, errors), parseFirstLineHeader(isFirstLineHeader, errors));
+
+        if (!errors.isEmpty())
+            throw ApiException.validation(errors);
+
+        return parsed;
+    }
+
+    private static Character parseDelimiter(String value, List<ApiException.FieldError> errors)
+    {
+        // isEmpty rather than isBlank: a tab is whitespace, and a tab is one of
+        // the three delimiters a caller may legitimately ask for
+        if (value == null || value.isEmpty())
+            return null;
+
+        var delimiter = DELIMITERS.get(value.toLowerCase(Locale.ROOT));
+        if (delimiter == null)
+        {
+            errors.add(new ApiException.FieldError("delimiter", "invalid-value",
+                            "delimiter must be a comma, a semicolon or a tab, written either as the character "
+                                            + "itself or as \"comma\", \"semicolon\" or \"tab\""));
+        }
+        return delimiter;
+    }
+
+    private static Charset parseEncoding(String value, List<ApiException.FieldError> errors)
+    {
+        if (value == null || value.isBlank())
+            return null;
+
+        try
+        {
+            return Charset.forName(value);
+        }
+        // as in parseMapping: reading a file with the wrong charset does not
+        // fail, it produces mojibake, so the caller has to be told the charset
+        // it named was refused rather than discover afterwards that the server
+        // used its own
+        catch (IllegalCharsetNameException | UnsupportedCharsetException e)
+        {
+            errors.add(new ApiException.FieldError("encoding", "invalid-value",
+                            "this server's JVM does not provide the charset \"" + value + "\""));
+            return null;
+        }
+    }
+
+    private static Integer parseSkipLines(String value, List<ApiException.FieldError> errors)
+    {
+        if (value == null || value.isBlank())
+            return null;
+
+        int skipLines;
+        try
+        {
+            skipLines = Integer.parseInt(value.trim());
+        }
+        catch (NumberFormatException e)
+        {
+            errors.add(new ApiException.FieldError("skipLines", "invalid-value",
+                            "skipLines must be a whole number"));
+            return null;
+        }
+
+        if (skipLines < 0)
+        {
+            errors.add(new ApiException.FieldError("skipLines", "invalid-range",
+                            "skipLines must not be negative"));
+            return null;
+        }
+
+        return skipLines;
+    }
+
+    private static Boolean parseFirstLineHeader(String value, List<ApiException.FieldError> errors)
+    {
+        if (value == null || value.isBlank())
+            return null;
+
+        var normalized = value.trim().toLowerCase(Locale.ROOT);
+        if ("true".equals(normalized))
+            return Boolean.TRUE;
+        if ("false".equals(normalized))
+            return Boolean.FALSE;
+
+        errors.add(new ApiException.FieldError("isFirstLineHeader", "invalid-value",
+                        "isFirstLineHeader must be true or false"));
+        return null;
     }
 
     /**

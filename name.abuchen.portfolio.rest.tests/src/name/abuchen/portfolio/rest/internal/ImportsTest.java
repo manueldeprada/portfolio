@@ -6,6 +6,7 @@ import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.nullValue;
 
@@ -639,6 +640,282 @@ public class ImportsTest
 
         assertThat(preview.getAsJsonArray("columns").size(), is(2));
         assertThat(preview.getAsJsonArray("sampleRows").size(), is(2));
+    }
+
+    /** This project's own documented CSV shape: nine columns, comma separated. */
+    private static final String COMMA_CSV = "date,type,name,isin,shares,value,fees,taxes,note\n"
+                    + "2026-08-24,BUY,Apple Inc.,US0378331005,1,100.00,1.00,0.00,first\n";
+
+    private static List<String> labelsOf(JsonObject preview)
+    {
+        var labels = new ArrayList<String>();
+        for (var element : preview.getAsJsonArray("columns"))
+            labels.add(element.getAsJsonObject().get("label").getAsString());
+        return labels;
+    }
+
+    @Test
+    public void testACommaSeparatedFileIsSplitOnCommasWhenTheDelimiterIsNamed()
+    {
+        // The importer's default delimiter is the server JVM locale's list
+        // separator, so this file previews as nine columns on an English-locale
+        // server and as one on a German or Spanish one - and the client cannot
+        // know which it is talking to. Both delimiters are therefore named
+        // explicitly here rather than left to the machine running the test.
+        var client = fixture();
+
+        var previewed = ImportsHandler.previewCsv(client, "depot.csv",
+                        COMMA_CSV.getBytes(StandardCharsets.UTF_8), ",", null, null, null);
+
+        assertThat(previewed.toString(), previewed.getAsJsonArray("columns").size(), is(9));
+        assertThat(labelsOf(previewed),
+                        contains("date", "type", "name", "isin", "shares", "value", "fees", "taxes", "note"));
+
+        var sampleRows = previewed.getAsJsonArray("sampleRows");
+        assertThat(sampleRows.size(), is(1));
+        assertThat(sampleRows.get(0).getAsJsonArray().size(), is(9));
+        assertThat(sampleRows.get(0).getAsJsonArray().get(2).getAsString(), is("Apple Inc."));
+    }
+
+    @Test
+    public void testTheWrongDelimiterIsWhatOneUnsplitColumnLooksLike()
+    {
+        // the failure this parameter exists to end, asserted rather than
+        // described: the whole header line as a single column label, and
+        // therefore a guess per target that has nothing to match
+        var client = fixture();
+
+        var previewed = ImportsHandler.previewCsv(client, "depot.csv",
+                        COMMA_CSV.getBytes(StandardCharsets.UTF_8), ";", null, null, null);
+
+        assertThat(previewed.getAsJsonArray("columns").size(), is(1));
+        assertThat(labelsOf(previewed), contains("date,type,name,isin,shares,value,fees,taxes,note"));
+        assertThat(guessesOf(previewed, "portfolio-transaction").getAsJsonObject("0").get("field").isJsonNull(),
+                        is(true));
+    }
+
+    @Test
+    public void testTheAutoDetectResolvesRealFieldsOnceTheSplitIsRight()
+    {
+        // the point of the parameter: the application's own matcher runs on the
+        // columns the caller asked for. The header uses the localized names the
+        // matcher knows, so the assertion holds on any JVM locale, while the
+        // comma delimiter is the one this server would not have chosen.
+        var d = ",";
+        var csv = Messages.CSVColumn_Date + d + "Close" + d + "Something Else\n" //
+                        + "2026-08-24" + d + "100.00" + d + "x\n";
+
+        var previewed = ImportsHandler.previewCsv(fixture(), "quotes.csv", csv.getBytes(StandardCharsets.UTF_8),
+                        ",", null, null, null);
+
+        var guesses = guessesOf(previewed, "investment-vehicle-price");
+        assertThat(previewed.toString(), guesses.getAsJsonObject("0").get("field").getAsString(), is("date"));
+        assertThat(previewed.toString(), guesses.getAsJsonObject("1").get("field").getAsString(), is("quote"));
+        assertThat(guesses.getAsJsonObject("2").get("field").isJsonNull(), is(true));
+    }
+
+    @Test
+    public void testADelimiterMayBeNamedInsteadOfWritten()
+    {
+        // a tab has to be written %09 in a query string and is invisible in
+        // anything that prints it afterwards, so it has a name; the other two
+        // take one for symmetry
+        var client = fixture();
+
+        var byName = ImportsHandler.previewCsv(client, "depot.csv", COMMA_CSV.getBytes(StandardCharsets.UTF_8),
+                        "comma", null, null, null);
+        assertThat(byName.getAsJsonArray("columns").size(), is(9));
+
+        var tabbed = "date\tvalue\n2026-08-24\t100.00\n";
+        for (var spelling : List.of("tab", "\t"))
+        {
+            var previewed = ImportsHandler.previewCsv(client, "depot.csv",
+                            tabbed.getBytes(StandardCharsets.UTF_8), spelling, null, null, null);
+            assertThat(spelling, previewed.getAsJsonArray("columns").size(), is(2));
+            assertThat(spelling, labelsOf(previewed), contains("date", "value"));
+        }
+    }
+
+    @Test
+    public void testADelimiterTheImporterDoesNotSupportIsRefusedRatherThanReplaced()
+    {
+        // CSVConfig#fromJSON silently substitutes a semicolon for anything it
+        // does not recognize. Doing that here would recreate the very bug this
+        // endpoint's delimiter parameter exists to fix, invisibly.
+        try
+        {
+            ImportsHandler.previewCsv(fixture(), "depot.csv", COMMA_CSV.getBytes(StandardCharsets.UTF_8),
+                            "|", null, null, null);
+            Assert.fail("expected a validation error");
+        }
+        catch (ApiException e)
+        {
+            assertThat(e.getStatus(), is(422));
+            assertThat(e.getErrors().get(0).field(), is("delimiter"));
+            assertThat(e.getErrors().get(0).code(), is("invalid-value"));
+        }
+    }
+
+    @Test
+    public void testTheFileIsReadInTheNamedEncoding()
+    {
+        var client = fixture();
+
+        // "Año" is one byte per character in ISO-8859-1 and is not valid
+        // UTF-8, so the two readings differ visibly rather than by accident.
+        // Written as an escape so this assertion does not depend on the
+        // encoding the compiler reads this source file in.
+        var word = "A\u00F1o";
+        var csv = ("date," + word + "\n2026-08-24,2026\n").getBytes(StandardCharsets.ISO_8859_1);
+
+        var latin = ImportsHandler.previewCsv(client, "depot.csv", csv, ",", "ISO-8859-1", null, null);
+        assertThat(labelsOf(latin), contains("date", word));
+
+        var utf8 = ImportsHandler.previewCsv(client, "depot.csv", csv, ",", "UTF-8", null, null);
+        assertThat(labelsOf(utf8).get(1), is(not(word)));
+    }
+
+    @Test
+    public void testAnEncodingThisJvmDoesNotProvideIsRefused()
+    {
+        // reading in the wrong charset does not fail, it produces mojibake, so a
+        // silent fall back to the server's own default would be invisible - the
+        // same reason an inline mapping's encoding is refused rather than replaced
+        try
+        {
+            ImportsHandler.previewCsv(fixture(), "depot.csv", COMMA_CSV.getBytes(StandardCharsets.UTF_8),
+                            null, "NOT-A-CHARSET", null, null);
+            Assert.fail("expected a validation error");
+        }
+        catch (ApiException e)
+        {
+            assertThat(e.getStatus(), is(422));
+            assertThat(e.getErrors().get(0).field(), is("encoding"));
+            assertThat(e.getErrors().get(0).code(), is("invalid-value"));
+            assertThat(e.getErrors().get(0).message(), containsString("NOT-A-CHARSET"));
+        }
+    }
+
+    @Test
+    public void testTheLinesBeforeTheHeaderAreSkipped()
+    {
+        var client = fixture();
+
+        var csv = "# exported by something\n# 2026-08-24\n" + COMMA_CSV;
+
+        var previewed = ImportsHandler.previewCsv(client, "depot.csv", csv.getBytes(StandardCharsets.UTF_8),
+                        ",", null, "2", null);
+
+        assertThat(previewed.toString(), labelsOf(previewed).get(0), is("date"));
+        assertThat(previewed.getAsJsonArray("columns").size(), is(9));
+        assertThat(previewed.getAsJsonArray("sampleRows").size(), is(1));
+    }
+
+    @Test
+    public void testASkipLinesThatIsNotAWholeNumberOrIsNegativeIsRefused()
+    {
+        for (var value : List.of("two", "-1"))
+        {
+            try
+            {
+                ImportsHandler.previewCsv(fixture(), "depot.csv", COMMA_CSV.getBytes(StandardCharsets.UTF_8),
+                                ",", null, value, null);
+                Assert.fail("expected a validation error for skipLines=" + value);
+            }
+            catch (ApiException e)
+            {
+                assertThat(value, e.getStatus(), is(422));
+                assertThat(value, e.getErrors().get(0).field(), is("skipLines"));
+            }
+        }
+    }
+
+    @Test
+    public void testAFileWithNoHeaderRowReportsItsFirstLineAsData()
+    {
+        var client = fixture();
+
+        var previewed = ImportsHandler.previewCsv(client, "depot.csv",
+                        COMMA_CSV.getBytes(StandardCharsets.UTF_8), ",", null, null, "false");
+
+        // the header line is now a data row, and the columns are labeled
+        // positionally rather than by a name the matcher could recognize
+        assertThat(previewed.getAsJsonArray("columns").size(), is(9));
+        assertThat(labelsOf(previewed), not(hasItem("date")));
+        assertThat(previewed.getAsJsonArray("sampleRows").size(), is(2));
+        assertThat(previewed.getAsJsonArray("sampleRows").get(0).getAsJsonArray().get(0).getAsString(),
+                        is("date"));
+    }
+
+    @Test
+    public void testAnIsFirstLineHeaderThatIsNeitherTrueNorFalseIsRefused()
+    {
+        try
+        {
+            ImportsHandler.previewCsv(fixture(), "depot.csv", COMMA_CSV.getBytes(StandardCharsets.UTF_8),
+                            ",", null, null, "maybe");
+            Assert.fail("expected a validation error");
+        }
+        catch (ApiException e)
+        {
+            assertThat(e.getStatus(), is(422));
+            assertThat(e.getErrors().get(0).field(), is("isFirstLineHeader"));
+            assertThat(e.getErrors().get(0).code(), is("invalid-value"));
+        }
+    }
+
+    @Test
+    public void testEveryBadParseSettingIsReportedAtOnce()
+    {
+        // the convention the rest of this API follows: a caller that got three
+        // of them wrong hears all three, not one per round trip
+        try
+        {
+            ImportsHandler.previewCsv(fixture(), "depot.csv", COMMA_CSV.getBytes(StandardCharsets.UTF_8),
+                            "|", "NOT-A-CHARSET", "-1", "maybe");
+            Assert.fail("expected a validation error");
+        }
+        catch (ApiException e)
+        {
+            assertThat(e.getStatus(), is(422));
+            var fields = e.getErrors().stream().map(ApiException.FieldError::field).toList();
+            assertThat(fields, contains("delimiter", "encoding", "skipLines", "isFirstLineHeader"));
+        }
+    }
+
+    @Test
+    public void testNamingNoneOfThemLeavesTheImportersOwnDefaultsInPlace()
+    {
+        // an existing caller sees no change: a file written with this JVM's own
+        // list separator previews exactly as it did before the four parameters
+        // existed, and the two overloads agree
+        var client = fixture();
+
+        var d = String.valueOf(TextUtil.getListSeparatorChar());
+        var csv = Messages.CSVColumn_Date + d + Messages.CSVColumn_Value + "\n" //
+                        + "2026-08-24" + d + "100.00\n";
+
+        var previewed = ImportsHandler.previewCsv(client, "depot.csv", csv.getBytes(StandardCharsets.UTF_8),
+                        null, null, null, null);
+
+        assertThat(previewed.getAsJsonArray("columns").size(), is(2));
+        assertThat(labelsOf(previewed), contains(Messages.CSVColumn_Date, Messages.CSVColumn_Value));
+        assertThat(previewed.getAsJsonArray("sampleRows").size(), is(1));
+        assertThat(previewed,
+                        is(ImportsHandler.previewCsv(client, "depot.csv", csv.getBytes(StandardCharsets.UTF_8))));
+    }
+
+    @Test
+    public void testABlankParseSettingIsTreatedAsUnnamed()
+    {
+        // a client that renders empty inputs sends "" rather than omitting the
+        // parameter; that must mean "no opinion", not "an unusable value"
+        var client = fixture();
+
+        var previewed = ImportsHandler.previewCsv(client, "depot.csv",
+                        COMMA_CSV.getBytes(StandardCharsets.UTF_8), ",", "", "", "");
+
+        assertThat(previewed.getAsJsonArray("columns").size(), is(9));
     }
 
     @Test

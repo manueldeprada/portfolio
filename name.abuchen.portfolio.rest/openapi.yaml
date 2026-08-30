@@ -1884,12 +1884,21 @@ paths:
         here, because a preview a caller has not yet mapped is not something
         review or apply could act on.
 
-        Read with the importer's own defaults (a locale-dependent delimiter,
-        the platform's default encoding, first line as header) — a file that
-        needs different ones still previews, just with columns split on the
-        wrong character; build the mapping against what `createImport` will
-        actually see once posted with the real `delimiter`/`encoding`/
-        `skipLines` in the same JSON.
+        How the file is split is the caller's to state: `delimiter`,
+        `encoding`, `skipLines` and `isFirstLineHeader` are the same four
+        settings a `createImport` mapping carries, each optional here and each
+        defaulting to the importer's own behavior, so a caller that names none
+        gets exactly what this endpoint returned before they existed.
+
+        Name them. The default delimiter is the **server JVM locale's** list
+        separator, so an English-locale server splits on a comma and a German
+        or Spanish one on a semicolon, and no client can know or control which.
+        A comma-separated file previewed against a semicolon comes back as a
+        single column whose label is the whole header line, and every target's
+        `guesses` then matches nothing: the auto-detect below is only as good
+        as the split it runs on. The settings are applied before the file is
+        read, so `columns`, `sampleRows` and `guesses` are all computed on the
+        split you asked for.
 
         The body is the `.csv` file itself, up to **16 MiB** like
         `createImport`, rather than the 1 MiB every JSON endpoint is held to.
@@ -1917,6 +1926,58 @@ paths:
           description: The name of the uploaded file; must end in `.csv`.
           schema:
             type: string
+        - name: delimiter
+          in: query
+          required: false
+          description: |
+            The character the columns are separated by: a comma, a semicolon
+            or a tab, and nothing else. Write it as the character itself (the
+            one-character spelling a `createImport` mapping's own `delimiter`
+            uses), or by name, which is what a tab is for, since a tab has to
+            be written `%09` in a query string and is invisible in anything it
+            is printed into afterwards. Anything else is refused rather than
+            replaced with a default: a file read with the wrong delimiter does
+            not fail, it yields one column.
+
+            Defaults to the server JVM locale's list separator, which is a
+            comma or a semicolon depending on where the server happens to run.
+          schema:
+            type: string
+            enum: [",", ";", "\t", comma, semicolon, tab]
+        - name: encoding
+          in: query
+          required: false
+          description: |
+            The charset to read the file in, by name (`UTF-8`,
+            `windows-1252`, `ISO-8859-1`). A charset this server's JVM does
+            not provide is refused, for the reason `createImport`'s
+            `mapping.encoding` is: reading in the wrong charset does not fail,
+            it produces mojibake, so a silent substitution would be invisible.
+
+            Defaults to the server's platform default charset.
+          schema:
+            type: string
+        - name: skipLines
+          in: query
+          required: false
+          description: |
+            How many lines to discard before the header, for a file that opens
+            with a preamble. Must not be negative.
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+        - name: isFirstLineHeader
+          in: query
+          required: false
+          description: |
+            Whether the first line read (after `skipLines`) names the columns.
+            When `false`, `columns` are labeled positionally and every line is
+            data, which also means `guesses` has no header to match and so
+            resolves nothing.
+          schema:
+            type: boolean
+            default: true
       requestBody:
         required: true
         content:
