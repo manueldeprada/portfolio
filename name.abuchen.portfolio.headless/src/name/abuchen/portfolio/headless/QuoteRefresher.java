@@ -2,6 +2,7 @@ package name.abuchen.portfolio.headless;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -15,10 +16,12 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 import name.abuchen.portfolio.PortfolioLog;
 import name.abuchen.portfolio.model.Security;
+import name.abuchen.portfolio.model.SecurityPrice;
 import name.abuchen.portfolio.model.SecurityProperty;
 import name.abuchen.portfolio.online.AuthenticationExpiredException;
 import name.abuchen.portfolio.online.Factory;
@@ -82,15 +85,36 @@ public class QuoteRefresher implements ControlServer.QuoteControl
 
     private static final class HistoricalTask extends Task
     {
-        HistoricalTask(QuoteFeed feed, Security security)
+        /** Set only for a bounded first fill; null asks the feed for its own default. */
+        private final LocalDate initialHistoryStart;
+
+        HistoricalTask(QuoteFeed feed, Security security, LocalDate initialHistoryStart)
         {
             super(feed, security);
+            this.initialHistoryStart = initialHistoryStart;
         }
 
         @Override
         Apply fetch() throws Exception
         {
-            var data = feed.getHistoricalQuotes(security, false);
+            // A security with no prices at all gets a bounded first fill rather than
+            // the feed's whole-history default, which for an empty security is thirty
+            // years of daily closes per instrument.
+            //
+            // The mechanism is a sentinel price seeded onto a deep copy used only for
+            // the request, never onto the model: it is the oldest price a security
+            // carries that YahooFinanceQuoteFeed's range selection reads to pick its
+            // bounded (about two-year) bucket. If that bucketing ever changes, this
+            // silently becomes a whole-history fetch again, so the coupling is worth
+            // re-reading whenever the feed is updated.
+            var fetchSecurity = security;
+            if (initialHistoryStart != null && security.getPrices().isEmpty())
+            {
+                fetchSecurity = security.deepCopy();
+                fetchSecurity.addPrice(new SecurityPrice(initialHistoryStart, 1L));
+            }
+
+            var data = feed.getHistoricalQuotes(fetchSecurity, false);
             if (!data.getErrors().isEmpty())
             {
                 // A response carrying errors and no prices at all is a failed update,
@@ -186,7 +210,14 @@ public class QuoteRefresher implements ControlServer.QuoteControl
     private volatile List<Failure> lastFailures = List.of();
 
     /** True while a user-requested cycle waits for the scheduler thread. */
-    private final AtomicBoolean requested = new AtomicBoolean();
+    private final AtomicInteger requested = new AtomicInteger();
+
+    /**
+     * How far back a security with an empty price series is filled the first time. A
+     * range of this length falls into Yahoo's two-year bucket, which is the bound; the
+     * exact number only has to sit inside that bucket rather than mean anything itself.
+     */
+    private static final int INITIAL_HISTORY_RANGE_DAYS = 430;
 
     public QuoteRefresher(HeadlessHost host, FileSet files)
     {
@@ -214,13 +245,26 @@ public class QuoteRefresher implements ControlServer.QuoteControl
      */
     public void start(Duration interval)
     {
-        scheduler.scheduleWithFixedDelay(this::refresh, 0, interval.toMillis(), TimeUnit.MILLISECONDS);
+        scheduler.scheduleWithFixedDelay(this::refreshAutomatic, 0, interval.toMillis(), TimeUnit.MILLISECONDS);
     }
 
     public void shutdown()
     {
         scheduler.shutdownNow();
         fetchers.shutdownNow();
+
+        // A deployment sends SIGTERM while a large first-history cycle may be in
+        // flight. Wait for the interrupted scheduler task to reach refresh(file)'s
+        // finally block and mark every already-applied quote dirty; AutoSaver runs
+        // after this component and then flushes that durable progress.
+        try
+        {
+            scheduler.awaitTermination(30, TimeUnit.SECONDS);
+        }
+        catch (InterruptedException e)
+        {
+            Thread.currentThread().interrupt();
+        }
     }
 
     @Override
@@ -238,7 +282,7 @@ public class QuoteRefresher implements ControlServer.QuoteControl
     @Override
     public boolean isRunning()
     {
-        return requested.get() || running;
+        return requested.get() > 0 || running;
     }
 
     @Override
@@ -249,39 +293,52 @@ public class QuoteRefresher implements ControlServer.QuoteControl
 
     /**
      * Queues one cycle on the scheduler thread, which is what serializes it against
-     * the scheduled ones. One queued cycle at a time: a second request while one
-     * waits would only run the same cycle twice. A request during a *running* cycle
-     * does queue - that cycle started before the request and cannot answer it.
+     * the scheduled ones. Targeted requests are retained independently because a
+     * missing-history fill and a last-price update are not interchangeable.
      */
     @Override
     public void requestRefresh()
     {
-        if (!requested.compareAndSet(false, true))
-            return;
+        queue(this::refreshAutomatic);
+    }
 
+    @Override
+    public void requestRefresh(String fileId, ControlServer.QuoteControl.Mode mode)
+    {
+        queue(() -> files.byId(fileId).ifPresent(file -> refresh(List.of(file), mode)));
+    }
+
+    private void queue(Runnable refresh)
+    {
+        requested.incrementAndGet();
         try
         {
             scheduler.execute(() -> {
-                requested.set(false);
-                refresh();
+                requested.decrementAndGet();
+                refresh.run();
             });
         }
         catch (RejectedExecutionException e)
         {
             // Shutting down; the request has no cycle to run in.
-            requested.set(false);
+            requested.decrementAndGet();
         }
     }
 
-    private void refresh()
+    private void refreshAutomatic()
+    {
+        refresh(files.listAutomaticQuoteRefresh(), ControlServer.QuoteControl.Mode.FULL);
+    }
+
+    private void refresh(List<HeadlessHost.LoadedFile> selected, ControlServer.QuoteControl.Mode mode)
     {
         running = true;
         var failures = new ConcurrentLinkedQueue<Failure>();
 
         try
         {
-            for (var file : files.list())
-                refresh(file, failures);
+            for (var file : selected)
+                refresh(file, failures, mode);
 
             lastUpdate = Instant.now();
         }
@@ -302,7 +359,8 @@ public class QuoteRefresher implements ControlServer.QuoteControl
         }
     }
 
-    private void refresh(HeadlessHost.LoadedFile file, Collection<Failure> failures) throws Exception
+    private void refresh(HeadlessHost.LoadedFile file, Collection<Failure> failures,
+                    ControlServer.QuoteControl.Mode mode) throws Exception
     {
         // Snapshot the securities on the model thread; the list itself is mutable and
         // an API write could be adding to it right now.
@@ -319,13 +377,26 @@ public class QuoteRefresher implements ControlServer.QuoteControl
             if (security.getEphemeralData().hasPermanentError())
                 continue;
 
+            var missingHistory = security.getPrices().isEmpty();
+            var includeHistorical = mode == ControlServer.QuoteControl.Mode.FULL
+                            || mode == ControlServer.QuoteControl.Mode.MISSING_HISTORY && missingHistory;
+
+            // A historical response already carries the newest daily close, so a
+            // first fill does not also ask for a latest quote: that would double the
+            // requests of the one cycle that has the most of them to make. The later
+            // cycles own the latest price.
+            var includeLatest = mode != ControlServer.QuoteControl.Mode.MISSING_HISTORY;
+
             var historical = Factory.getQuoteFeedProvider(security.getFeed());
-            if (historical != null && !QuoteFeed.MANUAL.equals(historical.getId()))
-                tasks.add(new HistoricalTask(historical, security));
+            if (includeHistorical && historical != null && !QuoteFeed.MANUAL.equals(historical.getId()))
+                tasks.add(new HistoricalTask(historical, security,
+                                mode == ControlServer.QuoteControl.Mode.MISSING_HISTORY
+                                                ? LocalDate.now().minusDays(INITIAL_HISTORY_RANGE_DAYS)
+                                                : null));
 
             var latestId = security.getLatestFeed() != null ? security.getLatestFeed() : security.getFeed();
             var latest = Factory.getQuoteFeedProvider(latestId);
-            if (latest != null && !QuoteFeed.MANUAL.equals(latest.getId()))
+            if (includeLatest && latest != null && !QuoteFeed.MANUAL.equals(latest.getId()))
                 tasks.add(new LatestTask(latest, security));
         }
 
@@ -334,23 +405,28 @@ public class QuoteRefresher implements ControlServer.QuoteControl
 
         var groups = tasks.stream().collect(Collectors.groupingBy(QuoteRefresher::criterionOf));
 
-        var futures = groups.values().stream().map(group -> fetchers.submit(() -> runGroup(group, failures)))
+        var modified = new AtomicBoolean();
+        var futures = groups.values().stream()
+                        .map(group -> fetchers.submit(() -> runGroup(group, failures, modified)))
                         .toList();
-        var modified = false;
-        for (var future : futures)
-            modified |= future.get().booleanValue();
-
-        if (!modified)
-            return;
-
-        // One notification for the whole file rather than one per price: the counter
-        // only has to move, and a per-price bump would mean tens of thousands of ETag
-        // invalidations for one cycle. This is also what marks the file dirty, so the
-        // autosaver writes the new prices out.
-        host.syncExec(() -> {
-            file.getClient().markDirty();
-            return null;
-        });
+        try
+        {
+            for (var future : futures)
+                future.get();
+        }
+        finally
+        {
+            if (modified.get())
+            {
+                // One notification for the whole file rather than one per price.
+                // The finally matters on shutdown: histories already applied before
+                // interruption are marked for AutoSaver's final flush.
+                host.syncExec(() -> {
+                    file.getClient().markDirty();
+                    return null;
+                });
+            }
+        }
     }
 
     private static String criterionOf(Task task)
@@ -366,7 +442,7 @@ public class QuoteRefresher implements ControlServer.QuoteControl
      * authentication abandons the rest of the group because every one of them would
      * fail the same way.
      */
-    private Boolean runGroup(List<Task> group, Collection<Failure> failures)
+    private Boolean runGroup(List<Task> group, Collection<Failure> failures, AtomicBoolean fileModified)
     {
         var pending = new ArrayList<>(group);
         var attemptsLeft = group.get(0).feed.getMaxRateLimitAttempts();
@@ -380,7 +456,10 @@ public class QuoteRefresher implements ControlServer.QuoteControl
             {
                 var apply = task.fetch();
                 if (host.syncExec(apply::apply).booleanValue())
+                {
                     modified = true;
+                    fileModified.set(true);
+                }
                 task.security.getEphemeralData().touchFeedLastUpdate();
             }
             catch (AuthenticationExpiredException e)

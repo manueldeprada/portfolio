@@ -57,7 +57,7 @@ import name.abuchen.portfolio.PortfolioLog;
  *                                   password-rejected
  * DELETE /files/{id}[?save=false]   token; save, release and forget one
  * GET    /quotes                    token; the last refresh cycle: when, what failed
- * POST   /quotes/refresh            token; queue a refresh cycle now, answered 202
+ * POST   /quotes/refresh[?file=&amp;mode=] token; queue a full or targeted cycle, 202
  * </pre>
  *
  * The bodies are small on purpose - a path, a base currency, the id of a file to copy
@@ -86,6 +86,11 @@ public class ControlServer
      */
     public interface QuoteControl extends Refresh
     {
+        enum Mode
+        {
+            FULL, LATEST, MISSING_HISTORY
+        }
+
         /**
          * One instrument that could not be updated in the last completed cycle.
          * {@code feed} is the failing feed's stable id ({@code PP}, {@code YAHOO},
@@ -100,6 +105,15 @@ public class ControlServer
 
         /** Queues a refresh cycle unless one is already queued; returns immediately. */
         void requestRefresh();
+
+        /**
+         * Queues a cycle over one file only, fetching what {@code mode} asks for.
+         * Abstract on purpose: a default that fell back to the whole-daemon
+         * {@link #requestRefresh()} would turn a request for one file's missing
+         * histories into a full cycle over every file, and answer 202 as if it had
+         * done what was asked.
+         */
+        void requestRefresh(String fileId, Mode mode);
 
         List<Failure> getLastFailures();
     }
@@ -209,7 +223,33 @@ public class ControlServer
                     // Queued rather than run inline: this server has one thread, and a
                     // cycle can take a minute - waiting here would block /health with
                     // it. The caller polls GET /quotes until running turns false.
-                    quotes.requestRefresh();
+                    var file = queryValue(exchange, "file");
+                    if (file == null)
+                    {
+                        quotes.requestRefresh();
+                    }
+                    else
+                    {
+                        if (files.byId(file).isEmpty())
+                        {
+                            send(exchange, 404, error("not-found", "No open file with id " + file));
+                            return;
+                        }
+                        var mode = queryValue(exchange, "mode");
+                        var parsed = switch (mode == null ? "full" : mode)
+                        {
+                            case "full" -> QuoteControl.Mode.FULL;
+                            case "latest" -> QuoteControl.Mode.LATEST;
+                            case "missing-history" -> QuoteControl.Mode.MISSING_HISTORY;
+                            default -> null;
+                        };
+                        if (parsed == null)
+                        {
+                            send(exchange, 400, error("bad-request", "mode must be full, latest or missing-history"));
+                            return;
+                        }
+                        quotes.requestRefresh(file, parsed);
+                    }
                     send(exchange, 202, quoteStatus());
                 }
                 else
@@ -292,6 +332,13 @@ public class ControlServer
 
         var copyOf = body.has("copyOf") ? body.get("copyOf").getAsString() : null;
         var create = body.has("create") && body.get("create").getAsBoolean();
+        var quoteRefresh = body.has("quoteRefresh") ? body.get("quoteRefresh").getAsString() : "automatic";
+
+        if (!"automatic".equals(quoteRefresh) && !"manual".equals(quoteRefresh))
+        {
+            send(exchange, 400, error("bad-request", "\"quoteRefresh\" must be automatic or manual"));
+            return;
+        }
 
         if (copyOf != null && create)
         {
@@ -310,6 +357,8 @@ public class ControlServer
                 opened = files.create(path, body.has("baseCurrency") ? body.get("baseCurrency").getAsString() : null);
             else
                 opened = files.open(path, password);
+
+            files.setAutomaticQuoteRefresh(opened.id(), !"manual".equals(quoteRefresh));
 
             // 200 rather than 201 for a file that was already open: nothing was
             // created, and a caller re-asserting its whole list of files on startup

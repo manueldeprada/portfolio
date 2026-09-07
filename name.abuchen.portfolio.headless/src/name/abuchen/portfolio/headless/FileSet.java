@@ -9,9 +9,11 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import org.eclipse.core.runtime.NullProgressMonitor;
 
@@ -105,6 +107,7 @@ public class FileSet
     /** Insertion-ordered, so /health and the control API list files predictably. */
     private final Map<Path, HeadlessHost.LoadedFile> files = new LinkedHashMap<>();
     private final Map<Path, PortfolioFileLock> locks = new LinkedHashMap<>();
+    private final Set<Path> manualQuoteRefresh = new LinkedHashSet<>();
 
     private volatile HostApplication host;
 
@@ -128,6 +131,23 @@ public class FileSet
     public synchronized List<HeadlessHost.LoadedFile> list()
     {
         return List.copyOf(files.values());
+    }
+
+    /** Files participating in the daemon's ordinary scheduled and user-requested cycles. */
+    public synchronized List<HeadlessHost.LoadedFile> listAutomaticQuoteRefresh()
+    {
+        return files.entrySet().stream().filter(entry -> !manualQuoteRefresh.contains(entry.getKey()))
+                        .map(Map.Entry::getValue).toList();
+    }
+
+    public synchronized void setAutomaticQuoteRefresh(String id, boolean automatic) throws IOException
+    {
+        var file = byId(id).orElseThrow(() -> new NoSuchFileException("No open file with id " + id));
+        var path = Path.of(file.getPath());
+        if (automatic)
+            manualQuoteRefresh.remove(path);
+        else
+            manualQuoteRefresh.add(path);
     }
 
     /** The same list as {@link #list()}, typed for {@link HeadlessHost}. */
@@ -357,6 +377,7 @@ public class FileSet
             flush(file);
 
         files.remove(path);
+        manualQuoteRefresh.remove(path);
 
         var lock = locks.remove(path);
         if (lock != null)

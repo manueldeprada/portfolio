@@ -161,7 +161,10 @@ untouched file would be rewritten every hour for ever.
 
 A cycle can also be asked for: `POST /quotes/refresh` on the control port queues one
 and answers 202 immediately (the control server has one thread, and holding the
-request open for a minute would block `/health` behind it); the caller polls
+request open for a minute would block `/health` behind it). Add
+`?file=<id>&mode=latest` to update only one file's last prices, or
+`mode=missing-history` to fetch history for the securities that have none and leave
+every other one alone; the default remains the full automatic set. The caller polls
 `GET /quotes` until `running` turns false. That status also reports, per instrument,
 what could not be updated in the last completed cycle - the feed needing a signed-in
 account, a rate limit, a feed that answered errors and no prices - so a client can
@@ -169,6 +172,22 @@ show *which* prices are stale rather than a single error string, and each entry 
 the failing feed's id, which is what lets a client offer "switch this instrument to a
 feed that works here" without parsing the reason text. `/health` keeps only the
 one-line summary.
+
+Two properties of that make a large file possible to keep current at all:
+
+- **A file can be opened `"quoteRefresh":"manual"`**, which leaves it out of the
+  scheduled cycle and out of an untargeted request; only a request naming it does
+  anything. The scheduled cycle is a whole-history update of every security in every
+  open file, which is right for a file a person owns and hopeless for one holding
+  thousands of instruments a caller maintains on a cadence of its own.
+- **`mode=missing-history` bounds the first fill.** A security with an empty price
+  series would otherwise pull the feed's whole-history default, about thirty years of
+  daily closes each. The refresher asks for roughly two years instead, and does not ask
+  for a latest quote on top of it - a historical response already carries the newest
+  close. How that bound is expressed is a coupling worth knowing about: it seeds a
+  sentinel price on a copy of the security used only for the request, because the oldest
+  price a security carries is what `YahooFinanceQuoteFeed` selects its range from. If
+  that feed's bucketing changes, the bound silently stops applying.
 
 ## Saving
 
@@ -201,7 +220,7 @@ GET    /files                     token; what is open, with each file's id
 POST   /files                     token; open, create or copy one
 DELETE /files/{id}[?save=false]   token; save, release and forget one
 GET    /quotes                    token; the last refresh cycle: when, what failed
-POST   /quotes/refresh            token; queue a refresh cycle now, answered 202
+POST   /quotes/refresh[?file=&mode=] token; queue a full or targeted cycle, answered 202
 ```
 
 An encrypted file takes a `password` in the body, and the two answers a caller acts
@@ -241,6 +260,10 @@ and so is an empty `files` array.
 ```bash
 # open a file that exists
 curl -H "Authorization: Bearer $TOKEN" -d '{"path":"/srv/pp/acct/main.portfolio"}' :5713/files
+
+# open one whose quotes the caller refreshes on its own cadence, not the scheduled one
+curl -H "Authorization: Bearer $TOKEN" \
+     -d '{"path":"/srv/pp/market-data.portfolio","quoteRefresh":"manual"}' :5713/files
 
 # create an empty one, in the desktop's own default format for a new file
 curl -H "Authorization: Bearer $TOKEN" \

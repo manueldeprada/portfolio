@@ -7,6 +7,7 @@ import static org.hamcrest.Matchers.not;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.UUID;
 
 import org.eclipse.core.runtime.NullProgressMonitor;
@@ -151,6 +152,20 @@ public class FileSetTest
         assertThat(files.byId(opened.id()).isPresent(), is(true));
         assertThat(files.byId(UUID.randomUUID().toString()).isPresent(), is(false));
         assertThat(files.idOf(opened.file()).orElse(null), is(opened.id()));
+    }
+
+    @Test
+    public void testManualFilesAreExcludedFromTheAutomaticQuoteCycle() throws Exception
+    {
+        var automatic = files.open(existingFile("automatic.portfolio"), null);
+        var manual = files.open(existingFile("manual.portfolio"), null);
+
+        files.setAutomaticQuoteRefresh(manual.id(), false);
+
+        assertThat(files.listAutomaticQuoteRefresh(), is(List.of(automatic.file())));
+
+        files.setAutomaticQuoteRefresh(manual.id(), true);
+        assertThat(files.listAutomaticQuoteRefresh(), is(List.of(automatic.file(), manual.file())));
     }
 
     /**

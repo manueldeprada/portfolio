@@ -86,6 +86,8 @@ public class ControlServerTest
         private final Instant lastUpdate;
         private final List<Failure> failures;
         private boolean requested;
+        private String requestedFile;
+        private Mode requestedMode;
 
         FixedQuotes(Instant lastUpdate, List<Failure> failures)
         {
@@ -120,6 +122,14 @@ public class ControlServerTest
         public void requestRefresh()
         {
             requested = true;
+        }
+
+        @Override
+        public void requestRefresh(String fileId, Mode mode)
+        {
+            requested = true;
+            requestedFile = fileId;
+            requestedMode = mode;
         }
 
         @Override
@@ -458,6 +468,42 @@ public class ControlServerTest
         finally
         {
             server.stop();
+        }
+    }
+
+    @Test
+    public void testAFileCanOptOutOfAutomaticQuotesAndReceiveTargetedModes() throws Exception
+    {
+        var files = emptySet();
+        var host = new HeadlessHost(files::listOpenFiles);
+        files.attach(host);
+        var quotes = FixedQuotes.never();
+        var server = server(files, FixedRefresh.succeeded(), quotes);
+        server.start();
+
+        try
+        {
+            var target = folder.getRoot().toPath().resolve("market-data.portfolio");
+            ClientFactory.saveAs(new Client(), target.toFile(), null, ClientFileType.BINARY.getFlags());
+            var opened = request(server.boundPort(), "POST", "/files",
+                            "{\"path\":\"" + target + "\",\"quoteRefresh\":\"manual\"}", TOKEN);
+            var id = json(opened.body()).get("id").getAsString();
+
+            assertThat(files.listAutomaticQuoteRefresh().isEmpty(), is(true));
+
+            var queued = request(server.boundPort(), "POST",
+                            "/quotes/refresh?file=" + id + "&mode=missing-history", null, TOKEN);
+            assertThat(queued.status(), is(202));
+            assertThat(quotes.requestedFile, is(id));
+            assertThat(quotes.requestedMode, is(ControlServer.QuoteControl.Mode.MISSING_HISTORY));
+            assertThat(request(server.boundPort(), "POST",
+                            "/quotes/refresh?file=" + id + "&mode=unknown", null, TOKEN).status(), is(400));
+        }
+        finally
+        {
+            server.stop();
+            host.shutdown();
+            files.releaseLocks();
         }
     }
 
