@@ -219,6 +219,7 @@ GET    /health                    no token; liveness, plus what is degraded
 GET    /files                     token; what is open, with each file's id
 POST   /files                     token; open, create or copy one
 DELETE /files/{id}[?save=false]   token; save, release and forget one
+PUT    /files/{id}/securities     token; add the securities it does not have yet
 GET    /quotes                    token; the last refresh cycle: when, what failed
 POST   /quotes/refresh[?file=&mode=] token; queue a full or targeted cycle, answered 202
 ```
@@ -275,7 +276,22 @@ curl -H "Authorization: Bearer $TOKEN" \
 
 # give one up: saved if dirty, unlocked, and forgotten
 curl -X DELETE -H "Authorization: Bearer $TOKEN" :5713/files/<id>
+
+# add a newly listed security without replacing the file or its quote history
+curl -X PUT -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+     -d '{"securities":[{"name":"Example","ticker":"EXM","currency":"USD","feed":"YAHOO"}]}' \
+     :5713/files/<id>/securities
 ```
+
+**The securities route is an additive merge, whatever `PUT` suggests.** It adds the
+entries whose ticker symbol the file does not have yet and touches nothing else: a
+security the caller has stopped listing stays where it is, and one it lists again is
+not rewritten, so a caller can re-send its whole list without losing the quote history
+the file has accumulated. Every entry is validated before any of them is added, so a
+`422` means **nothing was applied** and the same body can be sent again once the entry
+it named is corrected. A failure of this process rather than of the request - the model
+thread not carrying out the write - is answered `500`, so the two are not confused for
+each other by a caller deciding whether to retry.
 
 The `id` in the response is the registry uuid, which is what `GET /v1/files` reports and
 what every REST path addresses the file by - so a caller stores that and needs to know

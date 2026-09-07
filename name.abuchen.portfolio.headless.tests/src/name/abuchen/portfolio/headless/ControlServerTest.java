@@ -507,6 +507,89 @@ public class ControlServerTest
         }
     }
 
+    @Test
+    public void testSecuritiesCanBeAddedIncrementallyOverHttp() throws Exception
+    {
+        var files = emptySet();
+        var host = new HeadlessHost(files::listOpenFiles);
+        files.attach(host);
+        var server = server(files, FixedRefresh.succeeded());
+        server.start();
+
+        try
+        {
+            var target = folder.getRoot().toPath().resolve("market.portfolio");
+            ClientFactory.saveAs(new Client(), target.toFile(), null, ClientFileType.BINARY.getFlags());
+            var opened = request(server.boundPort(), "POST", "/files",
+                            "{\"path\":\"" + target + "\"}", TOKEN);
+            var id = json(opened.body()).get("id").getAsString();
+            var payload = "{\"securities\":[{\"name\":\"Apple\",\"ticker\":\"AAPL\","
+                            + "\"currency\":\"USD\",\"feed\":\"YAHOO\"}]}";
+
+            var first = request(server.boundPort(), "PUT", "/files/" + id + "/securities", payload, TOKEN);
+            assertThat(first.status(), is(200));
+            assertThat(json(first.body()).get("added").getAsInt(), is(1));
+            assertThat(json(first.body()).get("total").getAsInt(), is(1));
+
+            var second = request(server.boundPort(), "PUT", "/files/" + id + "/securities", payload, TOKEN);
+            assertThat(json(second.body()).get("added").getAsInt(), is(0));
+            assertThat(files.list().get(0).getClient().getSecurities().size(), is(1));
+        }
+        finally
+        {
+            server.stop();
+            host.shutdown();
+            files.releaseLocks();
+        }
+    }
+
+    /**
+     * The three ways the route says no, and the one that matters most: a rejected entry
+     * is answered 422 with the file untouched, so the caller can correct that entry and
+     * send the same body again rather than having to work out what already landed.
+     */
+    @Test
+    public void testARefusedSecurityListIsAppliedInFullOrNotAtAll() throws Exception
+    {
+        var files = emptySet();
+        var host = new HeadlessHost(files::listOpenFiles);
+        files.attach(host);
+        var server = server(files, FixedRefresh.succeeded());
+        server.start();
+
+        try
+        {
+            var target = folder.getRoot().toPath().resolve("refused.portfolio");
+            ClientFactory.saveAs(new Client(), target.toFile(), null, ClientFileType.BINARY.getFlags());
+            var opened = request(server.boundPort(), "POST", "/files", "{\"path\":\"" + target + "\"}", TOKEN);
+            var id = json(opened.body()).get("id").getAsString();
+
+            var refused = request(server.boundPort(), "PUT", "/files/" + id + "/securities",
+                            "{\"securities\":[{\"name\":\"Apple\",\"ticker\":\"AAPL\",\"currency\":\"USD\","
+                                            + "\"feed\":\"YAHOO\"},{\"name\":\"Nonsense\",\"ticker\":\"NON\","
+                                            + "\"currency\":\"XYZ\",\"feed\":\"YAHOO\"}]}",
+                            TOKEN);
+            assertThat(refused.status(), is(422));
+            assertThat(json(refused.body()).get("error").getAsString(), is("invalid-security"));
+
+            // The valid first entry is not in the file either, and nothing has to be
+            // saved: the whole list was refused before any of it was applied.
+            assertThat(files.list().get(0).getClient().getSecurities().isEmpty(), is(true));
+            assertThat(files.list().get(0).isDirty(), is(false));
+
+            assertThat(request(server.boundPort(), "PUT", "/files/" + UUID.randomUUID() + "/securities",
+                            "{\"securities\":[]}", TOKEN).status(), is(404));
+            assertThat(request(server.boundPort(), "PUT", "/files/" + id + "/securities", "{\"securities\":42}", TOKEN)
+                            .status(), is(400));
+        }
+        finally
+        {
+            server.stop();
+            host.shutdown();
+            files.releaseLocks();
+        }
+    }
+
     private static JsonObject json(String body)
     {
         return JsonParser.parseString(body).getAsJsonObject();

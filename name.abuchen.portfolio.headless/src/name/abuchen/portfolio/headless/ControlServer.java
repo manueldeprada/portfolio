@@ -9,6 +9,7 @@ import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.Executors;
@@ -56,6 +57,8 @@ import name.abuchen.portfolio.PortfolioLog;
  *                                   password-required, with a wrong one 403
  *                                   password-rejected
  * DELETE /files/{id}[?save=false]   token; save, release and forget one
+ * PUT    /files/{id}/securities     token; add the securities the file does not have
+ *                                   yet; an additive merge, nothing is replaced
  * GET    /quotes                    token; the last refresh cycle: when, what failed
  * POST   /quotes/refresh[?file=&amp;mode=] token; queue a full or targeted cycle, 202
  * </pre>
@@ -268,6 +271,18 @@ public class ControlServer
                 return;
             }
 
+            if (path.startsWith("/files/") && path.endsWith("/securities"))
+            {
+                if ("PUT".equals(method))
+                {
+                    var id = path.substring("/files/".length(), path.length() - "/securities".length());
+                    putSecurities(exchange, id);
+                }
+                else
+                    exchange.sendResponseHeaders(405, -1);
+                return;
+            }
+
             if ("DELETE".equals(method))
                 deleteFile(exchange, path.substring("/files/".length()));
             else
@@ -404,6 +419,64 @@ public class ControlServer
             // Wiped as soon as the load is done with it, so a heap dump taken later does
             // not still hold it.
             FileSet.wipe(password);
+        }
+    }
+
+    /**
+     * Adds the securities a file does not have yet - an additive merge, not the
+     * replacement the verb suggests. A {@code 422} means the request named something
+     * that cannot be a security and <em>nothing was applied</em>; the caller can fix
+     * that entry and send the same body again.
+     */
+    private void putSecurities(HttpExchange exchange, String id) throws IOException
+    {
+        try
+        {
+            var text = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            var body = JsonParser.parseString(text).getAsJsonObject();
+            if (!body.has("securities") || !body.get("securities").isJsonArray())
+            {
+                send(exchange, 400, error("bad-request", "\"securities\" must be an array"));
+                return;
+            }
+
+            var requested = new ArrayList<FileSet.SecuritySpec>();
+            for (var element : body.getAsJsonArray("securities"))
+            {
+                var security = element.getAsJsonObject();
+                requested.add(new FileSet.SecuritySpec( //
+                                security.has("name") ? security.get("name").getAsString() : null,
+                                security.has("ticker") ? security.get("ticker").getAsString() : null,
+                                security.has("currency") ? security.get("currency").getAsString() : null,
+                                security.has("feed") ? security.get("feed").getAsString() : null));
+            }
+
+            var result = files.addMissingSecurities(id, requested);
+            var response = new JsonObject();
+            response.addProperty("added", result.added());
+            response.addProperty("total", result.total());
+            send(exchange, 200, response);
+        }
+        catch (NoSuchFileException e)
+        {
+            send(exchange, 404, error("not-found", e.getMessage()));
+        }
+        catch (FileSet.InvalidSecurityException e)
+        {
+            send(exchange, 422, error("invalid-security", e.getMessage()));
+        }
+        catch (JsonSyntaxException | IllegalStateException e)
+        {
+            send(exchange, 400, error("bad-request", "the body must contain valid security objects"));
+        }
+        catch (IOException e)
+        {
+            // Whatever the model thread failed with arrives here as an IOException, and
+            // it is this process's failure rather than the request's. Answering it 422
+            // would send the caller looking for a mistake in a body that is fine.
+            PortfolioLog.error(e);
+            send(exchange, 500, error("internal-error",
+                            e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()));
         }
     }
 

@@ -6,6 +6,7 @@ import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -21,6 +22,7 @@ import name.abuchen.portfolio.PortfolioLog;
 import name.abuchen.portfolio.model.Client;
 import name.abuchen.portfolio.model.ClientFactory;
 import name.abuchen.portfolio.model.ClientFileType;
+import name.abuchen.portfolio.model.Security;
 import name.abuchen.portfolio.money.CurrencyUnit;
 import name.abuchen.portfolio.rest.FileAccessRegistry;
 import name.abuchen.portfolio.rest.spi.HostApplication;
@@ -76,6 +78,21 @@ public class FileSet
         }
     }
 
+    /**
+     * A security the caller asked for cannot be built. Deliberately not an
+     * {@link IOException}: everything the model thread can fail with arrives as one, and
+     * a caller told its request was invalid would retry a body that is perfectly fine.
+     */
+    public static class InvalidSecurityException extends IllegalArgumentException
+    {
+        private static final long serialVersionUID = 1L;
+
+        public InvalidSecurityException(String message)
+        {
+            super(message);
+        }
+    }
+
     /** What was done to a file, for the caller's log line. */
     public enum Outcome
     {
@@ -83,6 +100,14 @@ public class FileSet
     }
 
     public record Opened(HeadlessHost.LoadedFile file, String id, Outcome outcome)
+    {
+    }
+
+    public record SecuritySpec(String name, String ticker, String currency, String feed)
+    {
+    }
+
+    public record SecuritiesAdded(int added, int total)
     {
     }
 
@@ -148,6 +173,63 @@ public class FileSet
             manualQuoteRefresh.remove(path);
         else
             manualQuoteRefresh.add(path);
+    }
+
+    /**
+     * Adds the securities whose ticker symbol the file does not have yet.
+     * <p>
+     * An additive merge, whatever the verb on the wire suggests: an entry naming a
+     * ticker already on record is skipped rather than rewritten, and a security the
+     * caller no longer lists stays where it is. Nothing here removes or replaces
+     * anything, which is what lets a caller re-send its whole list without losing the
+     * quote history the file has accumulated.
+     * <p>
+     * <strong>Every entry is validated before any of them is added</strong>, so a
+     * refused request leaves the file exactly as it was - the all-or-nothing the REST
+     * API's own writes promise. Validating inside the loop would half-apply a list
+     * whose last entry is wrong, and mark the file dirty on top of it.
+     */
+    public SecuritiesAdded addMissingSecurities(String id, List<SecuritySpec> requested) throws IOException
+    {
+        var file = byId(id).orElseThrow(() -> new NoSuchFileException("No open file with id " + id));
+
+        for (var entry : requested)
+            validate(entry);
+
+        return runOnModelThread(() -> {
+            var client = file.getClient();
+            var present = new LinkedHashSet<String>();
+            for (var security : client.getSecurities())
+                if (security.getTickerSymbol() != null)
+                    present.add(security.getTickerSymbol());
+
+            var added = 0;
+            for (var entry : requested)
+            {
+                if (!present.add(entry.ticker()))
+                    continue;
+
+                var security = new Security(entry.name(), entry.currency());
+                security.setTickerSymbol(entry.ticker());
+                security.setFeed(entry.feed());
+
+                // The protobuf writer reads updatedAt unconditionally, so a security
+                // with none makes the next save of the file it is in fail.
+                security.setUpdatedAt(Instant.now());
+
+                client.addSecurity(security);
+                added++;
+            }
+            return new SecuritiesAdded(added, client.getSecurities().size());
+        });
+    }
+
+    private static void validate(SecuritySpec entry)
+    {
+        if (entry.name() == null || entry.name().isBlank() || entry.ticker() == null || entry.ticker().isBlank()
+                        || entry.feed() == null || entry.feed().isBlank() || entry.currency() == null
+                        || CurrencyUnit.getInstance(entry.currency()) == null)
+            throw new InvalidSecurityException("every security needs a name, ticker, feed and known currency");
     }
 
     /** The same list as {@link #list()}, typed for {@link HeadlessHost}. */

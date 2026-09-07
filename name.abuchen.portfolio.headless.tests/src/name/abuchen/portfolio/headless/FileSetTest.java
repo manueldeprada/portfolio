@@ -168,6 +168,57 @@ public class FileSetTest
         assertThat(files.listAutomaticQuoteRefresh(), is(List.of(automatic.file(), manual.file())));
     }
 
+    @Test
+    public void testAddingSecuritiesOnlyAddsMissingTickersAndPreservesExistingOnes() throws Exception
+    {
+        var opened = files.open(existingFile("market.portfolio"), null);
+        var existing = security("Existing Apple");
+        existing.setTickerSymbol("AAPL");
+        existing.setFeed("YAHOO");
+        opened.file().getClient().addSecurity(existing);
+
+        var result = files.addMissingSecurities(opened.id(), List.of(
+                        new FileSet.SecuritySpec("Apple Renamed", "AAPL", "USD", "YAHOO"),
+                        new FileSet.SecuritySpec("Microsoft", "MSFT", "USD", "YAHOO")));
+
+        assertThat(result.added(), is(1));
+        assertThat(result.total(), is(2));
+        assertThat(opened.file().getClient().getSecurities().get(0).getName(), is("Existing Apple"));
+        assertThat(opened.file().getClient().getSecurities().get(1).getTickerSymbol(), is("MSFT"));
+        assertThat(opened.file().isDirty(), is(true));
+
+        var again = files.addMissingSecurities(opened.id(),
+                        List.of(new FileSet.SecuritySpec("Microsoft", "MSFT", "USD", "YAHOO")));
+        assertThat(again.added(), is(0));
+        assertThat(again.total(), is(2));
+    }
+
+    /**
+     * The entries are validated before any of them is added, so a list whose last
+     * member is wrong applies none of the ones before it - and does not leave the file
+     * dirty either, which is what a caller retrying the corrected body depends on.
+     */
+    @Test
+    public void testAnInvalidSecurityIsRefusedBeforeAnythingIsAdded() throws Exception
+    {
+        var opened = files.open(existingFile("refused.portfolio"), null);
+
+        try
+        {
+            files.addMissingSecurities(opened.id(), List.of( //
+                            new FileSet.SecuritySpec("Microsoft", "MSFT", "USD", "YAHOO"),
+                            new FileSet.SecuritySpec("Nonsense", "NON", "XYZ", "YAHOO")));
+            Assert.fail("expected the unknown currency to be refused");
+        }
+        catch (FileSet.InvalidSecurityException e)
+        {
+            assertThat(e.getMessage(), is("every security needs a name, ticker, feed and known currency"));
+        }
+
+        assertThat(opened.file().getClient().getSecurities().isEmpty(), is(true));
+        assertThat(opened.file().isDirty(), is(false));
+    }
+
     /**
      * A copy is written from the live model, so unsaved work is part of what is
      * duplicated - which is the whole difference between this and a byte copy of the
