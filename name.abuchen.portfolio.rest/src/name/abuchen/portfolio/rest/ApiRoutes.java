@@ -272,15 +272,16 @@ public final class ApiRoutes
         router.add("GET", "/v1/files/{file}/holdings", calc(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
                         (context, req) -> Response.json(200, HoldingsHandler.list(context.client(), context.factory(),
                                         req.queryParam("date"), req.queryParam("openingDate"), //$NON-NLS-1$ //$NON-NLS-2$
-                                        req.queryParam("reportingCurrency"), req.queryParam("costMethod")))), //$NON-NLS-1$ //$NON-NLS-2$
-                        "date", "openingDate", "reportingCurrency", "costMethod"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                                        req.queryParam("reportingCurrency"), req.queryParam("costMethod"), //$NON-NLS-1$ //$NON-NLS-2$
+                                        req.queryParam("investmentAccount")))), //$NON-NLS-1$
+                        "date", "openingDate", "reportingCurrency", "costMethod", "investmentAccount"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
 
         router.add("GET", "/v1/files/{file}/performance", calc(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
                         (context, req) -> Response.json(200, PerformanceHandler.list(context.client(),
                                         context.factory(), req.queryParam("openingDate"), //$NON-NLS-1$
                                         req.queryParam("closingDate"), req.queryParam("reportingCurrency"), //$NON-NLS-1$ //$NON-NLS-2$
-                                        req.queryParam("costMethod")))), //$NON-NLS-1$
-                        "openingDate", "closingDate", "reportingCurrency", "costMethod"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
+                                        req.queryParam("costMethod"), req.queryParam("investmentAccount")))), //$NON-NLS-1$ //$NON-NLS-2$
+                        "openingDate", "closingDate", "reportingCurrency", "costMethod", "investmentAccount"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$ //$NON-NLS-5$
 
         // the performance report broken down by instrument. Five segments like
         // /files/{file}/instruments/{uuid}, but segment 4 is a literal in both
@@ -319,8 +320,8 @@ public final class ApiRoutes
                         (context, req) -> Response.json(200, PerformanceHandler.series(context.client(),
                                         context.factory(), req.queryParam("openingDate"), //$NON-NLS-1$
                                         req.queryParam("closingDate"), //$NON-NLS-1$
-                                        req.queryParam("reportingCurrency")))), //$NON-NLS-1$
-                        "openingDate", "closingDate", "reportingCurrency"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+                                        req.queryParam("reportingCurrency"), req.queryParam("investmentAccount")))), //$NON-NLS-1$ //$NON-NLS-2$
+                        "openingDate", "closingDate", "reportingCurrency", "investmentAccount"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ //$NON-NLS-4$
 
         router.add("GET", "/v1/files/{file}/performance/calendar", calc(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
                         (context, req) -> Response.json(200, PerformanceCalendarHandler.list(context.client(),

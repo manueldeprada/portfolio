@@ -33,6 +33,14 @@ public final class PerformanceHandler
     public static JsonElement list(Client client, ExchangeRateProviderFactory factory, String openingDateParam,
                     String closingDateParam, String currencyParam, String costMethodParam)
     {
+        return list(client, factory, openingDateParam, closingDateParam, currencyParam, costMethodParam, null);
+    }
+
+    /** As above, scoped to one investment account's instruments when {@code investmentAccountParam} is set. */
+    public static JsonElement list(Client client, ExchangeRateProviderFactory factory, String openingDateParam,
+                    String closingDateParam, String currencyParam, String costMethodParam,
+                    String investmentAccountParam)
+    {
         var errors = new ArrayList<ApiException.FieldError>();
 
         // null (not today) when unparseable: the range check must not judge a
@@ -41,23 +49,26 @@ public final class PerformanceHandler
         var closingDate = CalcParams.closingDate(closingDateParam, errors);
         var currency = CalcParams.reportingCurrency(client, currencyParam, errors);
         var costMethod = CalcParams.costMethod(costMethodParam, errors);
+        var portfolio = CalcParams.investmentAccount(client, investmentAccountParam, errors);
         CalcParams.requireRange(openingDate, closingDate, errors);
 
         if (!errors.isEmpty())
             throw ApiException.badRequest(errors);
 
+        var scoped = CalcParams.scope(client, portfolio);
         var converter = new CurrencyConverterImpl(factory, currency);
         var interval = Interval.of(openingDate, closingDate);
 
-        var performance = new ClientPerformanceSnapshot(client, converter, interval, costMethod.useFifo());
+        var performance = new ClientPerformanceSnapshot(scoped, converter, interval, costMethod.useFifo());
 
         // TTWROR comes from a second engine; IRR is money-weighted, both are
         // independent of the cost method
-        var ttwror = PerformanceIndex.forClient(client, converter, interval, new ArrayList<>())
+        var ttwror = PerformanceIndex.forClient(scoped, converter, interval, new ArrayList<>())
                         .getFinalAccumulatedPercentage();
         var irr = performance.getPerformanceIRR();
 
-        return EntityJson.performance(openingDate, closingDate, currency, costMethod, ttwror, irr, performance);
+        return EntityJson.performance(openingDate, closingDate, currency, costMethod, ttwror, irr, performance,
+                        portfolio);
     }
 
     /**
@@ -70,11 +81,19 @@ public final class PerformanceHandler
     public static JsonElement series(Client client, ExchangeRateProviderFactory factory, String openingDateParam,
                     String closingDateParam, String currencyParam)
     {
+        return series(client, factory, openingDateParam, closingDateParam, currencyParam, null);
+    }
+
+    /** As above, scoped to one investment account's instruments when {@code investmentAccountParam} is set. */
+    public static JsonElement series(Client client, ExchangeRateProviderFactory factory, String openingDateParam,
+                    String closingDateParam, String currencyParam, String investmentAccountParam)
+    {
         var errors = new ArrayList<ApiException.FieldError>();
 
         var openingDate = CalcParams.openingDate(openingDateParam, errors);
         var closingDate = CalcParams.closingDate(closingDateParam, errors);
         var currency = CalcParams.reportingCurrency(client, currencyParam, errors);
+        var portfolio = CalcParams.investmentAccount(client, investmentAccountParam, errors);
         CalcParams.requireRange(openingDate, closingDate, errors);
 
         if (!errors.isEmpty())
@@ -88,8 +107,9 @@ public final class PerformanceHandler
 
         var converter = new CurrencyConverterImpl(factory, currency);
         var interval = Interval.of(openingDate, closingDate);
-        var index = PerformanceIndex.forClient(client, converter, interval, new ArrayList<>());
+        var index = PerformanceIndex.forClient(CalcParams.scope(client, portfolio), converter, interval,
+                        new ArrayList<>());
 
-        return EntityJson.performanceSeries(client, openingDate, closingDate, currency, index);
+        return EntityJson.performanceSeries(client, openingDate, closingDate, currency, index, portfolio);
     }
 }

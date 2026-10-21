@@ -45,6 +45,21 @@ public final class HoldingsHandler
     public static JsonElement list(Client client, ExchangeRateProviderFactory factory, String dateParam,
                     String openingDateParam, String currencyParam, String costMethodParam)
     {
+        return list(client, factory, dateParam, openingDateParam, currencyParam, costMethodParam, null);
+    }
+
+    /**
+     * As above, optionally scoped to one investment account: only its instrument
+     * positions are valued, and the enrichment metrics describe that account
+     * alone. The desktop's {@code PortfolioClientFilter} with the portfolio and
+     * no cash account does the scoping, so a purchase counts as a delivery into
+     * the account and the cash it settled against is out of scope. "Since
+     * inception" is then the account's own first transaction.
+     */
+    public static JsonElement list(Client client, ExchangeRateProviderFactory factory, String dateParam,
+                    String openingDateParam, String currencyParam, String costMethodParam,
+                    String investmentAccountParam)
+    {
         var errors = new ArrayList<ApiException.FieldError>();
 
         var date = dateParam == null ? LocalDate.now() : CalcParams.date("date", dateParam, errors); //$NON-NLS-1$
@@ -54,6 +69,7 @@ public final class HoldingsHandler
                         : CalcParams.date("openingDate", openingDateParam, errors); //$NON-NLS-1$
 
         var costMethod = CalcParams.costMethod(costMethodParam, errors);
+        var portfolio = CalcParams.investmentAccount(client, investmentAccountParam, errors);
 
         if (!errors.isEmpty())
             throw ApiException.badRequest(errors);
@@ -62,13 +78,15 @@ public final class HoldingsHandler
             throw ApiException.badRequest(List.of(new ApiException.FieldError("openingDate", "invalid-range", //$NON-NLS-1$ //$NON-NLS-2$
                             "openingDate must be before date"))); //$NON-NLS-1$
 
+        var scoped = CalcParams.scope(client, portfolio);
+
         var converter = new CurrencyConverterImpl(factory, currency);
-        var snapshot = ClientSnapshot.create(client, converter, date);
+        var snapshot = ClientSnapshot.create(scoped, converter, date);
 
-        var interval = Interval.of(openingDate != null ? openingDate : inceptionDate(client, date), date);
-        var context = buildContext(client, converter, currency, interval, costMethod, date, snapshot);
+        var interval = Interval.of(openingDate != null ? openingDate : inceptionDate(scoped, date), date);
+        var context = buildContext(client, scoped, converter, currency, interval, costMethod, date, snapshot);
 
-        return EntityJson.toJson(context, snapshot, currency);
+        return EntityJson.toJson(context, snapshot, currency, portfolio);
     }
 
     /**
@@ -104,10 +122,11 @@ public final class HoldingsHandler
      * the desktop's "…BaseCurrency" columns, which recompute the same metrics
      * with the converter's term currency set to the security's own currency).
      */
-    private static HoldingsContext buildContext(Client client, CurrencyConverterImpl converter, String currency,
+    private static HoldingsContext buildContext(Client client, Client scoped, CurrencyConverterImpl converter,
+                    String currency,
                     Interval interval, CostMethod costMethod, LocalDate date, ClientSnapshot snapshot)
     {
-        var records = LazySecurityPerformanceSnapshot.create(client, converter, interval).getRecords().stream()
+        var records = LazySecurityPerformanceSnapshot.create(scoped, converter, interval).getRecords().stream()
                         .collect(Collectors.toMap(LazySecurityPerformanceRecord::getSecurity, r -> r));
 
         var localRecordsByCurrency = new HashMap<String, Map<Security, LazySecurityPerformanceRecord>>();
@@ -119,7 +138,7 @@ public final class HoldingsHandler
                         .filter(cc -> !cc.equals(currency)) //
                         .distinct() //
                         .forEach(cc -> localRecordsByCurrency.computeIfAbsent(cc,
-                                        key -> LazySecurityPerformanceSnapshot.create(client, converter.with(key), interval)
+                                        key -> LazySecurityPerformanceSnapshot.create(scoped, converter.with(key), interval)
                                                         .getRecords().stream()
                                                         .collect(Collectors.toMap(
                                                                         LazySecurityPerformanceRecord::getSecurity,

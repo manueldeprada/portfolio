@@ -6,8 +6,10 @@ import java.util.List;
 
 import name.abuchen.portfolio.model.Client;
 import name.abuchen.portfolio.model.CostMethod;
+import name.abuchen.portfolio.model.Portfolio;
 import name.abuchen.portfolio.model.TaxesAndFees;
 import name.abuchen.portfolio.money.CurrencyUnit;
+import name.abuchen.portfolio.snapshot.filter.PortfolioClientFilter;
 import name.abuchen.portfolio.snapshot.trades.TradeGrouping;
 
 /**
@@ -92,6 +94,30 @@ public final class CalcParams
         }
 
         return value;
+    }
+
+    /**
+     * The investment account a calculation is scoped to, or null for the whole
+     * file. An unknown uuid is a field error rather than an empty result, so a
+     * stale id cannot pass for an account without positions.
+     */
+    public static Portfolio investmentAccount(Client client, String value, List<ApiException.FieldError> errors)
+    {
+        if (value == null)
+            return null;
+
+        var portfolio = client.getPortfolios().stream().filter(p -> value.equals(p.getUUID())).findFirst();
+        if (portfolio.isEmpty())
+            errors.add(new ApiException.FieldError("investmentAccount", "unknown-reference", //$NON-NLS-1$ //$NON-NLS-2$
+                            "no such investment account")); //$NON-NLS-1$
+        return portfolio.orElse(null);
+    }
+
+    /** the client as the scoped calculation sees it: the portfolio's securities only, no cash account */
+    public static Client scope(Client client, Portfolio portfolio)
+    {
+        return portfolio == null ? client
+                        : new PortfolioClientFilter(List.of(portfolio), List.of()).filter(client);
     }
 
     public static CostMethod costMethod(String value, List<ApiException.FieldError> errors)

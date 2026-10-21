@@ -196,15 +196,29 @@ public final class EntityJson
      */
     public static JsonObject toJson(HoldingsContext context, ClientSnapshot snapshot, String reportingCurrency)
     {
+        return toJson(context, snapshot, reportingCurrency, null);
+    }
+
+    /**
+     * As above for a snapshot scoped to one investment account: it is echoed as
+     * {@code investmentAccount} and only its instrument positions are listed,
+     * since the cash the scoped calculation carries is bookkeeping, not a balance.
+     */
+    public static JsonObject toJson(HoldingsContext context, ClientSnapshot snapshot, String reportingCurrency,
+                    Portfolio scope)
+    {
         var total = snapshot.getMonetaryAssets();
 
         var json = new JsonObject();
         json.addProperty("date", snapshot.getTime().toString()); //$NON-NLS-1$
         json.addProperty("reportingCurrency", reportingCurrency); //$NON-NLS-1$
+        if (scope != null)
+            json.add("investmentAccount", toJsonOwner(scope)); //$NON-NLS-1$
         json.add("totalAssets", toJson(total)); //$NON-NLS-1$
 
         var items = new JsonArray();
         snapshot.getAssetPositions() //
+                        .filter(position -> scope == null || position.getSecurity() != null) //
                         .sorted(new AssetPosition.ByDescription()) //
                         .forEach(position -> items.add(toJson(context, position, total)));
         json.add("items", items); //$NON-NLS-1$
@@ -569,7 +583,16 @@ public final class EntityJson
     public static JsonObject performance(LocalDate openingDate, LocalDate closingDate, String reportingCurrency,
                     CostMethod costMethod, double ttwror, double irr, ClientPerformanceSnapshot performance)
     {
+        return performance(openingDate, closingDate, reportingCurrency, costMethod, ttwror, irr, performance, null);
+    }
+
+    public static JsonObject performance(LocalDate openingDate, LocalDate closingDate, String reportingCurrency,
+                    CostMethod costMethod, double ttwror, double irr, ClientPerformanceSnapshot performance,
+                    Portfolio scope)
+    {
         var json = new JsonObject();
+        if (scope != null)
+            json.add("investmentAccount", toJsonOwner(scope)); //$NON-NLS-1$
         json.addProperty("openingDate", openingDate.toString()); //$NON-NLS-1$
         json.addProperty("closingDate", closingDate.toString()); //$NON-NLS-1$
         json.addProperty("reportingCurrency", reportingCurrency); //$NON-NLS-1$
@@ -633,7 +656,15 @@ public final class EntityJson
     public static JsonObject performanceSeries(Client client, LocalDate openingDate, LocalDate closingDate,
                     String currency, PerformanceIndex index)
     {
+        return performanceSeries(client, openingDate, closingDate, currency, index, null);
+    }
+
+    public static JsonObject performanceSeries(Client client, LocalDate openingDate, LocalDate closingDate,
+                    String currency, PerformanceIndex index, Portfolio scope)
+    {
         var json = new JsonObject();
+        if (scope != null)
+            json.add("investmentAccount", toJsonOwner(scope)); //$NON-NLS-1$
         json.addProperty("openingDate", openingDate.toString());
         json.addProperty("closingDate", closingDate.toString());
         json.addProperty("currency", currency);

@@ -102,4 +102,33 @@ public class AccountReconciliationTest
 
         assertThat(seen, is(new TreeSet<>(CASH_DIRECTION.keySet())));
     }
+
+    /** what each wire type does to a share count, again written down rather than derived */
+    private static final Map<String, Integer> SHARE_DIRECTION = Map.of("buy", 1, "delivery-inbound", 1,
+                    "transfer-in", 1, "sell", -1, "delivery-outbound", -1, "transfer-out", -1);
+
+    @Test
+    public void testEveryInvestmentAccountsListAddsUpToItsHoldedShares()
+    {
+        var f = fixture();
+
+        for (var portfolio : f.client.getPortfolios())
+        {
+            var listed = 0d;
+            for (var item : TransactionsAccountFilterTest.forAccount(f.client, portfolio.getUUID()))
+            {
+                var direction = SHARE_DIRECTION.get(item.get("type").getAsString());
+                assertThat("an investment account lists only share movements: " + item.get("type"),
+                                direction != null, is(true));
+                listed += direction * item.get("shares").getAsDouble();
+            }
+
+            var held = 0d;
+            for (var position : InvestmentAccountScopeTest.holdings(f.client, portfolio.getUUID())
+                            .getAsJsonArray("items"))
+                held += position.getAsJsonObject().get("shares").getAsDouble();
+
+            assertThat(portfolio.getName(), listed, closeTo(held, 1e-6));
+        }
+    }
 }

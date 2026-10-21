@@ -2356,6 +2356,7 @@ paths:
             type: string
             enum: [fifo, moving-average]
             default: fifo
+        - $ref: "#/components/parameters/InvestmentAccountScope"
       responses:
         "200":
           description: The holdings at the valuation date
@@ -2377,6 +2378,20 @@ paths:
                       file's base currency. Not to be confused with a
                       `MonetaryValue`'s `currency` (one amount) or an entity's
                       `currencyCode` (its own declared currency).
+                  investmentAccount:
+                    type: object
+                    description: |
+                      Present when the request was scoped with `investmentAccount`.
+                      A scoped report lists instrument positions only.
+                    required: [uuid, name, type]
+                    properties:
+                      uuid:
+                        type: string
+                      name:
+                        type: string
+                      type:
+                        type: string
+                        description: Always `investment-account`.
                   totalAssets:
                     $ref: "#/components/schemas/MonetaryValue"
                   items:
@@ -2482,6 +2497,7 @@ paths:
             type: string
             enum: [fifo, moving-average]
             default: fifo
+        - $ref: "#/components/parameters/InvestmentAccountScope"
       responses:
         "200":
           description: The performance over the interval
@@ -2950,6 +2966,7 @@ paths:
             type: string
             format: date
         - $ref: "#/components/parameters/ReportingCurrency"
+        - $ref: "#/components/parameters/InvestmentAccountScope"
       responses:
         "200":
           description: The daily index and its risk metrics
@@ -3241,6 +3258,21 @@ components:
         entity's `currencyCode` is its own declared currency.
       schema:
         type: string
+    InvestmentAccountScope:
+      name: investmentAccount
+      in: query
+      required: false
+      description: |
+        The uuid of an investment account. The calculation then covers only that
+        account's instruments: a purchase counts as a delivery into the account
+        and the cash it settled against is out of scope, so the totals equal the
+        account's `value` in `GET .../investment-accounts`. "Since inception"
+        becomes the account's own first transaction, and the account is echoed
+        as `investmentAccount` in the response. An unknown uuid is rejected
+        `400 unknown-reference` on `investmentAccount`.
+      schema:
+        type: string
+        format: uuid
     InstrumentCostMethod:
       name: costMethod
       in: query
@@ -4804,6 +4836,18 @@ components:
         - irr
         - breakdown
       properties:
+        investmentAccount:
+          type: object
+          description: Present when the request was scoped with `investmentAccount`.
+          required: [uuid, name, type]
+          properties:
+            uuid:
+              type: string
+            name:
+              type: string
+            type:
+              type: string
+              description: Always `investment-account`.
         openingDate:
           type: string
           format: date
@@ -5022,6 +5066,18 @@ components:
         from it.
       required: [openingDate, closingDate, currency, risk, days]
       properties:
+        investmentAccount:
+          type: object
+          description: Present when the request was scoped with `investmentAccount`.
+          required: [uuid, name, type]
+          properties:
+            uuid:
+              type: string
+            name:
+              type: string
+            type:
+              type: string
+              description: Always `investment-account`.
         openingDate:
           type: string
           format: date
