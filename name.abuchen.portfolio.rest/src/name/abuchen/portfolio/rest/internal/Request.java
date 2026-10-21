@@ -30,6 +30,18 @@ public record Request(String method, String path, Map<String, String> pathParams
         this(method, path, pathParams, queryParams, Map.of(), body, Authorization.VALID, null);
     }
 
+    public Request(String method, String path, Map<String, String> pathParams, Map<String, String> queryParams,
+                    Map<String, String> headers, byte[] body)
+    {
+        this(method, path, pathParams, queryParams, headers, body, Authorization.VALID, null);
+    }
+
+    public Request(String method, String path, Map<String, String> pathParams, Map<String, String> queryParams,
+                    byte[] body, Authorization authorization, String userAgent)
+    {
+        this(method, path, pathParams, queryParams, Map.of(), body, authorization, userAgent);
+    }
+
     public Request(String method, String path, Map<String, String> pathParams, byte[] body)
     {
         this(method, path, pathParams, Map.of(), body);
