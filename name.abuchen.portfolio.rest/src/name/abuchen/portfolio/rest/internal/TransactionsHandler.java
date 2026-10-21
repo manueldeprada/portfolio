@@ -114,7 +114,43 @@ public final class TransactionsHandler
      */
     public static JsonElement list(Client client)
     {
-        var transactions = new ArrayList<>(client.getAllTransactions());
+        return list(client, null);
+    }
+
+    /**
+     * As {@link #list(Client)}, optionally narrowed to one account. {@code
+     * account} is the uuid of a cash account or an investment account and
+     * selects every transaction that touches it: the cash legs of buys and
+     * sells and both legs of a transfer, not only the legs the account owns in
+     * the de-duplicated list. Each is reported from that account's side (its
+     * {@code owner.uuid} is the requested account, the other side is the {@code
+     * counterOwner}), once, so the signed {@code value}s of a cash account's
+     * entries add up to its balance.
+     */
+    public static JsonElement list(Client client, String accountParam)
+    {
+        var transactions = new ArrayList<TransactionPair<?>>();
+
+        if (accountParam == null)
+        {
+            transactions.addAll(client.getAllTransactions());
+        }
+        else
+        {
+            var cash = client.getAccounts().stream().filter(a -> accountParam.equals(a.getUUID())).findFirst();
+            var investment = client.getPortfolios().stream().filter(p -> accountParam.equals(p.getUUID()))
+                            .findFirst();
+
+            if (cash.isPresent())
+                cash.get().getTransactions().forEach(t -> transactions.add(new TransactionPair<>(cash.get(), t)));
+            else if (investment.isPresent())
+                investment.get().getTransactions()
+                                .forEach(t -> transactions.add(new TransactionPair<>(investment.get(), t)));
+            else
+                throw ApiException.badRequest(List.of(new ApiException.FieldError("account", "invalid-value",
+                                accountParam + " is not a known cash account or investment account")));
+        }
+
         transactions.sort(TransactionPair.BY_DATE.reversed());
         return EntityJson.envelope(transactions, EntityJson::toJson);
     }

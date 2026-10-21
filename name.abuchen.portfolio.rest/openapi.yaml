@@ -1532,6 +1532,25 @@ paths:
         investment account's sell, transfer-out, delivery-outbound); positive
         otherwise. `grossValue`, `fees` and `taxes` are plain (unsigned)
         magnitudes in the transaction's own currency.
+
+        With `account`, the list is every transaction that **touches** that
+        account instead: for a cash account also the cash legs of buys and
+        sells and both legs of a transfer, for an investment account both
+        sides of a transfer between investment accounts. Each entry is
+        reported from that account's side — `owner` is the requested account
+        and `counterOwner` the other side of a cross entry — and appears once.
+        The signed `value`s of a cash account's entries therefore add up to the
+        account's closing balance in `.../cash-accounts/{uuid}/balances`.
+      parameters:
+        - name: account
+          in: query
+          required: false
+          description: |
+            The uuid of a cash account or an investment account. An unknown
+            uuid is rejected `400 invalid-value` on `account`.
+          schema:
+            type: string
+            format: uuid
       responses:
         "200":
           description: Every transaction, newest first

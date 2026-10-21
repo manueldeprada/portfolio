@@ -212,7 +212,9 @@ public final class ApiRoutes
                         }));
 
         router.add("GET", "/v1/files/{file}/transactions", read(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
-                        (client, req) -> Response.json(200, TransactionsHandler.list(client))));
+                        (client, req) -> Response.json(200,
+                                        TransactionsHandler.list(client, req.queryParam("account")))), //$NON-NLS-1$
+                        "account"); //$NON-NLS-1$
         router.add("POST", "/v1/files/{file}/transactions", write(resolver, host, //$NON-NLS-1$ //$NON-NLS-2$
                         (file, req) -> {
                             var result = TransactionsHandler.create(file.getClient(), parseObject(req));
